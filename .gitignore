@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Checkpoints and data
+checkpoints/
+videos/
+*.h5
+*.pt
+*.pth
+
+# Logs
+*.log
+wandb/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
