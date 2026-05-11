@@ -149,12 +149,9 @@ def wandb_log_checkpoint(run: Any, path: str | Path, name: str = "checkpoint") -
     if run is None:
         return
     try:
-        import wandb
-        artifact = wandb.Artifact(name=name, type="model")
-        artifact.add_file(str(path))
-        run.log_artifact(artifact)
+        run.save(str(path), policy="now")
     except Exception as e:
-        logger.warning("Failed to log checkpoint artifact: %s", e)
+        logger.warning("Failed to log checkpoint: %s", e)
 
 
 def wandb_log_video(run: Any, path: str | Path, key: str = "rollout") -> None:
