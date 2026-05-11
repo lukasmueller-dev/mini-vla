@@ -1,0 +1,35 @@
+# ── Environment ──────────────────────────────────────────────────────────────
+env_id: "PickCube-v1"
+control_mode: "pd_ee_delta_pose"
+obs_mode: "rgb+state"             # HDF5 was recorded with this obs_mode
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+demo_path: "~/.maniskill/demos/PickCube-v1/motionplanning/trajectory.rgb+state.pd_ee_delta_pose.physx_cpu.h5"
+num_demos: 100
+
+# ── Model ────────────────────────────────────────────────────────────────────
+# state_dim / action_dim set automatically at runtime from dataset
+hidden_dims: [256, 256, 256]
+
+# ── Training ─────────────────────────────────────────────────────────────────
+seed: 42
+num_epochs: 500
+batch_size: 512
+learning_rate: 3.0e-4
+weight_decay: 1.0e-5
+lr_scheduler: "cosine"
+warmup_epochs: 5
+grad_clip: 1.0
+
+train_val_split: 0.9
+num_workers: 4
+
+checkpoint_dir: "checkpoints/state_bc"
+checkpoint_every: 10
+log_every: 50
+
+# ── WandB ────────────────────────────────────────────────────────────────────
+use_wandb: true
+wandb_project: "mini-vla"
+wandb_entity: null
+run_name: "pickcube-state-bc"

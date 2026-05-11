@@ -91,3 +91,19 @@ class BCPolicy(nn.Module):
         state_emb = torch.relu(self.state_encoder(state))
         fused = torch.cat([img_emb, state_emb], dim=-1)
         return self.action_head(fused)
+
+
+class MLPPolicy(nn.Module):
+    """State-only BC policy: state → action (no image input)."""
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_dims: Sequence[int] = (256, 256, 256),
+    ) -> None:
+        super().__init__()
+        self.net = _mlp(state_dim, hidden_dims, action_dim)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        return self.net(state)

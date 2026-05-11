@@ -81,6 +81,45 @@ def load_maniskill_demos(
     return samples
 
 
+def load_maniskill_state_demos(
+    demo_path: str | Path,
+    num_demos: int | None = None,
+) -> list[dict]:
+    """
+    Load ManiSkill3 demo trajectories — state and actions only (no RGB).
+
+    Much faster and lower memory than load_maniskill_demos because images are
+    never read from disk.  Returns a list of dicts with keys 'state' and 'action'.
+    """
+    import h5py
+
+    path = Path(demo_path).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Demo file not found: {path}")
+
+    samples: list[dict] = []
+
+    with h5py.File(path, "r") as f:
+        traj_keys = sorted(f.keys())
+        if num_demos is not None:
+            traj_keys = traj_keys[:num_demos]
+
+        for key in traj_keys:
+            traj = f[key]
+            actions = traj["actions"][:]       # (T, action_dim)
+            T = len(actions)
+            state_raw = traj["obs/state"][:T]  # (T, state_dim)
+
+            for t in range(T):
+                samples.append({
+                    "state":  torch.from_numpy(state_raw[t].astype(np.float32)),
+                    "action": torch.from_numpy(actions[t].astype(np.float32)),
+                })
+
+    logger.info("Loaded %d transitions from %d trajectories in %s", len(samples), len(traj_keys), path)
+    return samples
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Torch Dataset
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,4 +207,55 @@ class BCDataset(Dataset[DemoSample]):
         train_ds = BCDataset(train)
         # Val uses train's normalisation stats to avoid data leakage.
         val_ds = BCDataset(val, state_mean=train_ds.state_mean, state_std=train_ds.state_std)
+        return train_ds, val_ds
+
+
+class StateBCDataset(Dataset):
+    """State-only behavior cloning dataset (no images)."""
+
+    def __init__(
+        self,
+        samples: list[dict],
+        state_mean: torch.Tensor | None = None,
+        state_std: torch.Tensor | None = None,
+    ) -> None:
+        self.state  = torch.stack([s["state"]  for s in samples])
+        self.action = torch.stack([s["action"] for s in samples])
+
+        if state_mean is None:
+            self.state_mean = self.state.mean(0)
+            self.state_std  = self.state.std(0).clamp(min=1e-6)
+        else:
+            self.state_mean = state_mean
+            self.state_std  = state_std
+        self.state = (self.state - self.state_mean) / self.state_std
+
+        logger.info(
+            "StateBCDataset: %d samples  |  state %s  |  action %s",
+            len(self),
+            tuple(self.state.shape[1:]),
+            tuple(self.action.shape[1:]),
+        )
+
+    def __len__(self) -> int:
+        return len(self.state)
+
+    def __getitem__(self, idx: int) -> dict:
+        return {"state": self.state[idx], "action": self.action[idx]}
+
+    @staticmethod
+    def train_val_split(
+        samples: list[dict],
+        train_frac: float = 0.9,
+        seed: int = 42,
+    ) -> tuple["StateBCDataset", "StateBCDataset"]:
+        rng = np.random.default_rng(seed)
+        idx = rng.permutation(len(samples))
+        cut = int(len(idx) * train_frac)
+        train_ds = StateBCDataset([samples[i] for i in idx[:cut]])
+        val_ds   = StateBCDataset(
+            [samples[i] for i in idx[cut:]],
+            state_mean=train_ds.state_mean,
+            state_std=train_ds.state_std,
+        )
         return train_ds, val_ds
