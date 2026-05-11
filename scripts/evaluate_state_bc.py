@@ -1,14 +1,14 @@
 """
-Evaluate a trained behavior cloning policy in ManiSkill.
+Evaluate a trained state-only MLP behavior cloning policy in ManiSkill.
 
 Usage:
-    # Evaluate the latest checkpoint:
-    python scripts/evaluate_rgb_state_bc.py --config configs/pickcube_rgb_state_bc.yaml
+    # From a wandb run (downloads latest .pt from Files tab):
+    python scripts/evaluate_state_bc.py --config configs/pickcube_state_bc.yaml \\
+        --wandb-run <entity/project/run_id>
 
-    # Evaluate a specific checkpoint:
-    python scripts/evaluate_rgb_state_bc.py \\
-        --config configs/pickcube_rgb_state_bc.yaml \\
-        --checkpoint checkpoints/epoch_0100.pt
+    # From a local checkpoint:
+    python scripts/evaluate_state_bc.py --config configs/pickcube_state_bc.yaml \\
+        --checkpoint checkpoints/state_bc/epoch_0500.pt
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from mini_vla.eval import evaluate
-from mini_vla.train import build_policy
+from mini_vla.eval import evaluate_state
+from mini_vla.models import MLPPolicy
 from mini_vla.utils import (
     latest_checkpoint,
     load_checkpoint,
@@ -43,7 +43,6 @@ def _download_checkpoint_from_wandb(run_id: str, cfg: dict) -> Path | None:
         import wandb
         api = wandb.Api()
 
-        # Accept bare run_id or full entity/project/run_id
         if run_id.count("/") < 2:
             entity = cfg.get("wandb_entity") or api.default_entity
             project = cfg.get("wandb_project", "mini-vla")
@@ -59,7 +58,6 @@ def _download_checkpoint_from_wandb(run_id: str, cfg: dict) -> Path | None:
             logger.error("No .pt files found in wandb run %s", run_path)
             return None
 
-        # Prefer best.pt, otherwise take the latest by name
         names = [f.name for f in pt_files]
         target = next((f for f in pt_files if "best" in f.name), None) or pt_files[-1]
         logger.info("Available checkpoints: %s", names)
@@ -69,7 +67,6 @@ def _download_checkpoint_from_wandb(run_id: str, cfg: dict) -> Path | None:
         download_dir.mkdir(parents=True, exist_ok=True)
         target.download(root=str(download_dir), replace=True)
 
-        # file.download() preserves the remote path inside root
         candidates = list(download_dir.rglob("*.pt"))
         return candidates[-1] if candidates else None
 
@@ -82,13 +79,13 @@ def main() -> None:
     setup_logging()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/pickcube_rgb_state_bc.yaml")
+    parser.add_argument("--config", default="configs/pickcube_state_bc.yaml")
     parser.add_argument("--checkpoint", default=None, help="Path to .pt checkpoint file")
     parser.add_argument("--wandb-run", default=None,
                         help="Download latest checkpoint from a wandb run. "
                              "Format: <run_id> or <entity/project/run_id>")
-    parser.add_argument("--episodes", type=int, default=None, help="Override eval_episodes")
-    parser.add_argument("--override", nargs="*", default=[], help="key=value overrides")
+    parser.add_argument("--episodes", type=int, default=None)
+    parser.add_argument("--override", nargs="*", default=[])
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -106,52 +103,50 @@ def main() -> None:
         device = torch.device("cpu")
     logger.info("Device: %s", device)
 
-    # ── Find checkpoint ───────────────────────────────────────────────────
     ckpt_path = args.checkpoint or cfg.get("eval_checkpoint")
 
     if ckpt_path is None and args.wandb_run:
         ckpt_path = _download_checkpoint_from_wandb(args.wandb_run, cfg)
 
     if ckpt_path is None:
-        ckpt_path = latest_checkpoint(cfg.get("checkpoint_dir", "checkpoints"))
+        ckpt_path = latest_checkpoint(cfg.get("checkpoint_dir", "checkpoints/state_bc"))
     if ckpt_path is None:
         logger.error("No checkpoint found. Pass --checkpoint, --wandb-run, or train first.")
         sys.exit(1)
     logger.info("Loading checkpoint: %s", ckpt_path)
 
-    # ── Build and load policy ─────────────────────────────────────────────
-    # We need state_dim and action_dim.  Read them from the saved config.
     ckpt_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     saved_cfg  = ckpt_data.get("config", cfg)
 
-    # The dimensions are not saved explicitly; they're embedded in the weight shapes.
-    # Extract from the checkpoint's first and last layer.
+    # Infer dims from weight shapes: net is [Linear, ReLU, Linear, ReLU, ..., Linear]
     sd = ckpt_data["model_state_dict"]
-    state_dim  = sd["state_encoder.0.weight"].shape[1]
-    action_dim = sd["action_head.2.weight"].shape[0]  # last Linear out_features
-    # (fallback: search for the last Linear layer)
-    last_key = [k for k in sd if "weight" in k and "action_head" in k][-1]
-    action_dim = sd[last_key].shape[0]
+    state_dim  = sd["net.0.weight"].shape[1]
+    action_dim = sd[[k for k in sd if "weight" in k][-1]].shape[0]
+    hidden_dims = saved_cfg.get("hidden_dims", cfg.get("hidden_dims", [256, 256, 256]))
 
-    logger.info("Inferred state_dim=%d  action_dim=%d", state_dim, action_dim)
+    logger.info("Inferred state_dim=%d  action_dim=%d  hidden_dims=%s",
+                state_dim, action_dim, hidden_dims)
 
-    policy = build_policy(saved_cfg, state_dim, action_dim).to(device)
+    policy = MLPPolicy(state_dim=state_dim, action_dim=action_dim, hidden_dims=hidden_dims).to(device)
     load_checkpoint(ckpt_path, policy, device=device)
 
-    # ── WandB ─────────────────────────────────────────────────────────────
+    # Use normalisation stats from the checkpoint's saved config
+    for key in ("state_mean", "state_std"):
+        if key in saved_cfg and key not in cfg:
+            cfg[key] = saved_cfg[key]
+
     wandb_run = wandb_init(cfg)
 
-    # ── Evaluate ──────────────────────────────────────────────────────────
-    result = evaluate(policy, cfg, device, wandb_run=wandb_run)
+    result = evaluate_state(policy, cfg, device, wandb_run=wandb_run)
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("  Evaluation Results")
-    print("="*50)
+    print("=" * 50)
     print(f"  Episodes        : {len(result.episode_rewards)}")
     print(f"  Success Rate    : {result.success_rate:.2%}")
     print(f"  Avg Reward      : {result.avg_reward:.3f}")
     print(f"  Avg Ep Length   : {result.avg_episode_length:.1f}")
-    print("="*50 + "\n")
+    print("=" * 50 + "\n")
 
     wandb_finish(wandb_run)
 

@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 
-from mini_vla.models import BCPolicy
+from mini_vla.models import BCPolicy, MLPPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,137 @@ def evaluate(
                 "eval/avg_episode_length": result.avg_episode_length,
             },
         )
+
+    return result
+
+
+def _extract_state(
+    obs: Any,
+    device: torch.device,
+    state_mean: torch.Tensor | None = None,
+    state_std: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Extract flat state tensor. Handles raw tensor obs (obs_mode='state') and dict obs."""
+    if isinstance(obs, torch.Tensor):
+        state_np = obs.cpu().numpy().astype(np.float32).squeeze(0)
+    elif isinstance(obs, np.ndarray):
+        state_np = obs.astype(np.float32).squeeze(0)
+    elif isinstance(obs, dict):
+        if "state" in obs:
+            state_np = np.asarray(obs["state"], dtype=np.float32).squeeze(0)
+        elif "agent" in obs:
+            agent = obs["agent"]
+            parts = [np.asarray(agent[k], dtype=np.float32).ravel() for k in ("qpos", "qvel") if k in agent]
+            state_np = np.concatenate(parts)
+        else:
+            raise ValueError("Could not find 'state' or 'agent' key in obs dict.")
+    else:
+        raise ValueError(f"Unrecognised obs type: {type(obs)}")
+    state_t = torch.from_numpy(state_np).unsqueeze(0).to(device)
+    if state_mean is not None and state_std is not None:
+        state_t = (state_t - state_mean.to(device)) / state_std.to(device)
+    return state_t
+
+
+def evaluate_state(
+    policy: MLPPolicy,
+    cfg: dict[str, Any],
+    device: torch.device,
+    wandb_run: Any = None,
+) -> EvalResult:
+    """Evaluate a state-only MLP policy (no images)."""
+    import gymnasium as gym
+    try:
+        import mani_skill.envs  # noqa: F401
+    except ImportError:
+        pass
+
+    env_id: str = cfg["env_id"]
+    control_mode: str = cfg.get("control_mode", "pd_ee_delta_pose")
+    n_episodes: int = cfg.get("eval_episodes", 50)
+    max_steps: int = cfg.get("eval_max_steps", 200)
+    save_video: bool = cfg.get("save_video", False)
+    video_dir = Path(cfg.get("video_dir", "videos"))
+    video_w: int = cfg.get("video_width", 512)
+    video_h: int = cfg.get("video_height", 512)
+
+    env = gym.make(
+        env_id,
+        obs_mode="state",
+        control_mode=control_mode,
+        render_mode="rgb_array" if save_video else None,
+        human_render_camera_configs=dict(render_camera=dict(width=video_w, height=video_h)),
+        max_episode_steps=max_steps,
+    )
+
+    state_mean = state_std = None
+    if "state_mean" in cfg and "state_std" in cfg:
+        state_mean = torch.tensor(cfg["state_mean"], dtype=torch.float32)
+        state_std  = torch.tensor(cfg["state_std"],  dtype=torch.float32)
+    else:
+        logger.warning("No state_mean/state_std in config — state will NOT be normalised.")
+
+    result = EvalResult(0.0, 0.0, 0.0)
+    policy.eval()
+
+    for ep in range(n_episodes):
+        obs, _ = env.reset()
+        done = False
+        ep_reward = 0.0
+        ep_len = 0
+        ep_success = False
+        frames: list[np.ndarray] = []
+
+        with torch.no_grad():
+            while not done and ep_len < max_steps:
+                try:
+                    state_t = _extract_state(obs, device, state_mean, state_std)
+                except Exception as e:
+                    logger.error("State extraction failed: %s", e)
+                    break
+
+                action: np.ndarray = policy(state_t).cpu().numpy().squeeze(0)
+                obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
+                ep_reward += float(reward)
+                ep_len += 1
+
+                if save_video:
+                    frame = env.render()
+                    if frame is not None:
+                        frame = np.asarray(frame)
+                        if frame.ndim == 4:
+                            frame = frame[0]
+                        frames.append(frame)
+
+                if info.get("success", False):
+                    ep_success = True
+
+        result.episode_rewards.append(ep_reward)
+        result.episode_lengths.append(ep_len)
+        result.episode_success.append(ep_success)
+        logger.info("Episode %d/%d  reward %.2f  len %d  success %s",
+                    ep + 1, n_episodes, ep_reward, ep_len, ep_success)
+
+        if save_video and frames:
+            _save_video(frames, video_dir, ep, cfg.get("video_fps", 20), wandb_run)
+
+    env.close()
+
+    result.success_rate       = float(np.mean(result.episode_success))
+    result.avg_reward         = float(np.mean(result.episode_rewards))
+    result.avg_episode_length = float(np.mean(result.episode_lengths))
+
+    logger.info("Eval done  success_rate %.2f  avg_reward %.2f  avg_ep_len %.1f",
+                result.success_rate, result.avg_reward, result.avg_episode_length)
+
+    if wandb_run is not None:
+        from mini_vla.utils import wandb_log
+        wandb_log(wandb_run, {
+            "eval/success_rate": result.success_rate,
+            "eval/avg_reward": result.avg_reward,
+            "eval/avg_episode_length": result.avg_episode_length,
+        })
 
     return result
 
