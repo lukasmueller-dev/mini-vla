@@ -88,8 +88,9 @@ def load_maniskill_state_demos(
     """
     Load ManiSkill3 demo trajectories — state and actions only (no RGB).
 
-    Much faster and lower memory than load_maniskill_demos because images are
-    never read from disk.  Returns a list of dicts with keys 'state' and 'action'.
+    Supports two HDF5 layouts:
+      - obs/state key (standard ManiSkill3 replay)
+      - env_states layout: concatenates panda + actor states
     """
     import h5py
 
@@ -106,9 +107,19 @@ def load_maniskill_state_demos(
 
         for key in traj_keys:
             traj = f[key]
-            actions = traj["actions"][:]       # (T, action_dim)
+            actions = traj["actions"][:]  # (T, action_dim)
             T = len(actions)
-            state_raw = traj["obs/state"][:T]  # (T, state_dim)
+
+            if "obs/state" in traj:
+                state_raw = traj["obs/state"][:T]
+            else:
+                # Build state from env_states: robot + all actors
+                parts = []
+                if "env_states/articulations/panda" in traj:
+                    parts.append(traj["env_states/articulations/panda"][:T])
+                for actor in sorted(traj.get("env_states/actors", {}).keys()):
+                    parts.append(traj[f"env_states/actors/{actor}"][:T])
+                state_raw = np.concatenate(parts, axis=-1).astype(np.float32)
 
             for t in range(T):
                 samples.append({

@@ -4,7 +4,7 @@ control_mode: "pd_ee_delta_pose"
 obs_mode: "rgb+state"             # HDF5 was recorded with this obs_mode
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
-demo_path: "~/.maniskill/demos/PickCube-v1/motionplanning/trajectory.rgb+state.pd_ee_delta_pose.physx_cpu.h5"
+demo_path: "/root/demos/PickCube-v1/motionplanning/pick_cube_1000.h5"
 num_demos: 100
 
 # ── Model ────────────────────────────────────────────────────────────────────
