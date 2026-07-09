@@ -154,6 +154,39 @@ function angleErr(pred: number, label: number): number {
   return (((pred - label + Math.PI) % m) + m) % m - Math.PI;
 }
 
+/**
+ * WebKit workaround: turn off tfjs's fence-based GPU readback.
+ *
+ * backend_webgl resolves every `tensor.data()` by awaiting createAndWaitForFence(),
+ * which creates a `fenceSync` and polls `clientWaitSync` until the GPU signals.
+ * tfjs allocates one sync object per read and never calls `deleteSync`. On iOS
+ * WebKit the fence stops signalling after a modest number of reads and the
+ * promise simply never settles. `trainOnBatch` reads one loss per output head,
+ * and this model has five, so the language warm-up (single-head) survives, the
+ * first full step survives, and the SECOND full step wedges forever: thread
+ * alive, status "training", `batches` frozen at 1. The page eventually loses its
+ * web process to the leaked textures.
+ *
+ * With the flag off, createFence reports "passed" immediately and the texture is
+ * downloaded synchronously. That read BLOCKS — which is precisely why the loop
+ * belongs in the worker (trainer.worker.ts), where it costs the UI nothing.
+ *
+ * Gate notes: NOT tfjs's own `IS_SAFARI` flag. That tests `navigator.vendor`,
+ * and WorkerNavigator does not expose it (`vendor`/`vendorSub`/`productSub` are
+ * window-only), so it reads FALSE inside the worker on iOS — exactly where this
+ * must fire. `userAgent` IS exposed there. Every iOS browser is WebKit
+ * underneath (CriOS, FxiOS, EdgiOS) and shares the bug; none carry a "Chrome/"
+ * token, while desktop Chrome/Edge do and Firefox has no AppleWebKit token.
+ *
+ * Verified on iPhone (iOS 18.7 / Safari 26.5): converges in ~6s with this,
+ * hangs at batch 1 without it. No effect on Chrome, where the gate is false.
+ */
+function maybeDisableWebGLFence(tf: typeof tfType): void {
+  const ua = typeof navigator === "undefined" ? "" : (navigator.userAgent ?? "");
+  if (/AppleWebKit/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua))
+    tf.env().set("WEBGL_FENCE_API_ENABLED", false);
+}
+
 export type TrainerStatus =
   | "idle"
   | "loading"
@@ -777,6 +810,7 @@ export class VLATrainerCore {
         // reintroducing that class of bug for zero measured benefit.
         const tf = await import("@tensorflow/tfjs");
         await tf.ready();
+        maybeDisableWebGLFence(tf);
         this.tf = tf;
       }
       embed = await embedP;
