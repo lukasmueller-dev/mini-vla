@@ -4,8 +4,9 @@
 // sizes), each with synonyms; pick-up commands are generated from a slot
 // grammar (filler? verb article color-word noun please?) so hundreds of
 // surface forms collapse onto a single color intent.
-// The word inventory lives in grammar.json (single source of truth shared
-// with scripts/gen-embeddings-data.mjs). Which colors/densities are actually
+// The word inventory lives in assets/grammar.json (single source of truth
+// shared with the Python package mini_vla/task.py and the embedding generator
+// scripts/gen-embeddings-data.mjs). Which colors/densities are actually
 // SAMPLED is the user's ⚙ run config (src/run-config.ts): scenes place
 // 2..min(maxBlocks, numColors) blocks (≤2 per side band), colors drawn from
 // the first numColors palette entries without replacement — every block is a
@@ -20,7 +21,7 @@
 // randomly drops ~10% of non-color training tokens to <unk> so the encoder
 // learns to shrug off genuinely unknown words.
 
-import grammar from "./grammar.json";
+import grammar from "../../assets/grammar.json";
 import { CONFIG } from "./config";
 import { BLOCK, BLOCK_MAX, BLOCK_MIN } from "./geometry";
 import { runConfig } from "./run-config";

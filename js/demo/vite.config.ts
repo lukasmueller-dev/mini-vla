@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+// repo root is two levels up (js/demo/ → js/ → repo root); assets/ lives there,
+// shared with the Python package.
+const root = fileURLToPath(new URL("../..", import.meta.url));
 const assetsDir = path.join(root, "assets");
 
 // Serve the package's assets/ at /vla so loadEmbeddings()'s default assetBase
