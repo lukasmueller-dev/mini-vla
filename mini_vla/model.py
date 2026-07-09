@@ -8,7 +8,9 @@
 # the commanded block?"); a spatial softmax turns the score row into an
 # attention map; and the readout is the map's SOFT-ARGMAX — the expected (x, y)
 # image coordinate under the map — plus its attention-weighted feature vector. A
-# small dense head then regresses the target joint angles.
+# small dense head then regresses the target joint angles as CIRCULAR coords
+# (cosθ, sinθ per joint; recovered with atan2 at readout) so a wrong-side pick
+# is a bounded error, not an outlier tail.
 #
 # Language: ONE attention-pooled slot with a LOCAL-CONTEXT (conv) scorer. A
 # conv1d scorer (kernel 7 over the token axis, linear) scores every token from

@@ -141,7 +141,12 @@ def main() -> None:
 
     # Projected in-browser training time — the hard < 30 s product budget the
     # ported js/ demo must meet (see CLAUDE.md). Treat OVER BUDGET as a regression.
-    est_browser = BROWSER_LOAD_SECONDS + trainer.batches / BROWSER_BATCHES_PER_SEC
+    # The 10 batches/s calibration was measured at imgSize 64 / batchSize 32, and
+    # per-batch cost is ~quadratic in imgSize · ~linear in batchSize — so weight
+    # by that factor or the estimate is wrong whenever those knobs move (e.g.
+    # imgSize 48 makes each batch ~0.56× the cost). Mirrors param_sweep.py.
+    cost_factor = (cfg.CONFIG.model.imgSize / 64.0) ** 2 * (cfg.CONFIG.trainer.batchSize / 32.0)
+    est_browser = BROWSER_LOAD_SECONDS + trainer.batches * cost_factor / BROWSER_BATCHES_PER_SEC
     over = est_browser > BROWSER_BUDGET_SECONDS
     print(f"[budget] {trainer.batches} batches → est. browser train "
           f"≈ {est_browser:.0f}s (budget {BROWSER_BUDGET_SECONDS:.0f}s) "

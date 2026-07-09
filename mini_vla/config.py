@@ -40,13 +40,17 @@ class ConvLayer:
 
 @dataclass
 class ModelConfig:
-    # Square input resolution fed to the CNN. Raised 32→64 lets the policy
-    # resolve WHERE in its placement band a block sits (block ~8px, band ~12px)
-    # so it reaches precisely; at 32 the position blurred to ~3px and it could
-    # only learn the per-band mean target. The CNN and attention grid adapt
-    # symbolically, so this is the only downstream knob — but per-batch vision
-    # compute scales ~4x vs 32. Keep renderSize ≈ 4x this.
-    imgSize: int = 64
+    # Square input resolution fed to the CNN. Lowered 64→48 in the 2026-07 sweep:
+    # per-batch vision compute is ~quadratic in this (48 is ~0.56× the cost of
+    # 64), and that per-batch saving is what pulls the est. browser train time
+    # UNDER the 30s budget. The old "32 was too blurry to resolve within-band
+    # position" floor no longer binds — sin/cos action coords + the spatial
+    # attention readout now carry the position signal, so grasp precision held at
+    # 48 (5-seed grasp actually rose vs 64). The CNN and attention grid adapt
+    # symbolically (48 → two pools → 12×12 grid), so this stays the only
+    # downstream knob. renderSize (256) is left as-is — 5.3× here, ample
+    # antialiasing headroom (the ≈4× guidance is a floor).
+    imgSize: int = 48
     # Adam learning rate. 0.005 won the 2026-07 sweep at batchSize 32 / imgSize
     # 64: 0.008 was collapse-prone (side-binding failure on bad seeds) and 0.003
     # measurably slower without being more reliable.
@@ -69,8 +73,12 @@ class ModelConfig:
     # within-band position signal spans only ~0.16 while the other ~74 fusion
     # inputs swing ~1.0, so the coordinate pathway's gradients are ~10x smaller
     # and the action head parks on a per-side-mean policy. Plain feature
-    # standardization — the kernel is frozen, so the gain is exact.
-    attnCoordGain: float = 32
+    # standardization — the kernel is frozen, so the gain is exact. Raised 32→48
+    # in the 2026-07 sweep: amplifying the position signal further was the single
+    # biggest grasp win (5-seed mean +17, worst-seed up markedly). It has a
+    # peak — 24 collapsed a seed to 0% grasp and 64 overshot (worse than 48) —
+    # so 48 is the optimum, not a "more is better" knob.
+    attnCoordGain: float = 48
     # Huber transition point for the action loss. The two IK target clusters
     # (commanded block left vs. right) sit ~4.3 rad apart, so plain MSE lets the
     # rare (~1%) wrong-side pick dominate over regression precision. Huber is
@@ -89,8 +97,12 @@ class ModelConfig:
     # "over the block" cue) at the old weight/frac — measured: positive-class
     # mean prediction 0.09 vs negative 0.06 (no discrimination) and 0% closed-
     # loop grasp rate. Both raised together restored discrimination (0.51 vs
-    # 0.12) and grasp rate (42%, above the pre-mirror baseline's 35%).
-    gripperLossWeight: float = 0.6
+    # 0.12) and grasp rate (42%, above the pre-mirror baseline's 35%). Raised
+    # again 0.6→1.0 in the combined-config sweep: with reach precision handled by
+    # sin/cos + attnCoordGain, the remaining worst-SEED failures were the gripper
+    # (good reach loss but a low grip-accuracy seed), and 1.0 gave the best
+    # worst-seed reliability.
+    gripperLossWeight: float = 1.0
     # Vision CNN stack, in order. The LAST stage's output map is what the
     # language-conditioned spatial attention scores (see model.py) — its spatial
     # size sets the attention grid (64 → two pools → 16×16 here), and its
