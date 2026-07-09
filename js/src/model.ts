@@ -9,7 +9,9 @@
 // attention map; and the readout is the map's SOFT-ARGMAX — the expected
 // (x, y) image coordinate under the map — plus its attention-weighted feature
 // vector (block size / local shape). A small dense head then regresses the
-// target joint angles from that readout.
+// target joint angles as CIRCULAR coords (cosθ, sinθ per joint; recovered with
+// atan2 at readout — see trainer.core's anglesFromCircular) so a wrong-side
+// pick is a BOUNDED error, not an outlier tail.
 //
 // Why this shape: the previous architecture (FiLM-modulated CNN → flatten →
 // dense) buried the vision→language binding inside a flatten that destroys
@@ -103,17 +105,19 @@ export const ATTN_GRID = CONFIG.model.conv.reduce(
 
 export interface VLAModels {
   /** Main policy (the one that trains): [vision, tokens, carry] →
-      [action angles (2), color softmax, attention map [G*G], gripper (1)]. The
-      map is a trained OUTPUT, not just a readout — see mapLossWeight in
-      config.ts for why the action loss alone can't train the attention. color
-      reads the pooled language slot — a pure text decoder. gripper is the
-      learned "close now" command (last output; see below). */
+      [action circular coords (cosθ1,sinθ1,cosθ2,sinθ2), color softmax,
+      attention map [G*G], gripper (1)]. Angles are recovered from the 4 action
+      outputs with atan2 in trainer.core's inferTarget. The map is a trained
+      OUTPUT, not just a readout — see mapLossWeight in config.ts for why the
+      action loss alone can't train the attention. color reads the pooled
+      language slot — a pure text decoder. gripper is the learned "close now"
+      command (last output; see below). */
   model: tfType.LayersModel;
   /** Inference/readout twin sharing every layer (no weights of its own):
-      same inputs → [action angles (2), attention map [G*G], gripper (1)]. One
-      predict on this yields the action, the "where is the model looking" viz
-      AND the gripper command in a single pass (trainer.core computes the map
-      expectation CPU-side). */
+      same inputs → [action circular coords (4), attention map [G*G],
+      gripper (1)]. One predict on this yields the action, the "where is the
+      model looking" viz AND the gripper command in a single pass (trainer.core
+      computes the map expectation + the atan2 angle recovery CPU-side). */
   viz: tfType.LayersModel;
   /** Language-only training twin: [tokens] → [color]. Shares the embedding +
       conv scorer + color head with `model` (no weights of its own), but its
@@ -284,8 +288,18 @@ export function buildVLAModel(tf: TF, embedMatrix: Float32Array): VLAModels {
   const dense1 = tf.layers
     .dense({ units: CONFIG.model.fusionUnits, activation: "relu" })
     .apply(fused);
+  // ACTION as CIRCULAR coordinates, not raw angles: 4 outputs =
+  // (cosθ1, sinθ1, cosθ2, sinθ2), the target angles projected onto the unit
+  // circle (trainer.core builds the label; inferTarget recovers the angle with
+  // atan2, CPU-side, like attentionWeights). WHY: a raw-angle regression makes a
+  // wrong-SIDE pick a ~4.3-rad outlier that dominates MSE (the reason the old
+  // head needed a Huber delta); on the circle that same miss is a BOUNDED error
+  // (each component ∈ [-1, 1]), so plain MSE keeps the correct-side precision
+  // floor low without a robust-loss hack, and the discontinuity-free target is
+  // smoother to fit. Linear (not tanh) output — atan2 only reads the direction,
+  // so leaving the radius free avoids tanh saturation near ±1 slowing the fit.
   const actionOutput = tf.layers
-    .dense({ units: 2, activation: "linear", name: "action" })
+    .dense({ units: 4, activation: "linear", name: "action" })
     .apply(dense1) as tfType.SymbolicTensor;
   const colorOutput = tf.layers
     .dense({ units: COLORS.length, activation: "softmax", name: "color" })
@@ -359,10 +373,15 @@ export function buildVLAModel(tf: TF, embedMatrix: Float32Array): VLAModels {
   // tfjs-layers doesn't implement compile({lossWeights}) — scale the aux
   // color loss inside a custom per-output loss function instead (and the
   // loss array must then be all-functions, so the action loss is a function
-  // too). The action loss is Huber, not MSE: the wrong-side outlier tail (see
-  // ACTION_HUBER_DELTA) otherwise dominates both the floor and the gradient.
+  // too). The action loss is plain MSE now that the target is on the unit
+  // circle (bounded components → no wrong-side outlier tail → the Huber delta
+  // the raw-angle head needed is gone; ACTION_HUBER_DELTA survives only as the
+  // trainer.core probe's angle-space metric). NOTE the loss scale stays
+  // comparable to the old Huber-on-angle: near the target the circle map has
+  // unit speed, so the per-component MSE equals the small-error Huber — the
+  // converge.loss threshold carries over unchanged.
   const actionLoss = (yTrue: tfType.Tensor, yPred: tfType.Tensor) =>
-    tf.losses.huberLoss(yTrue, yPred, undefined, ACTION_HUBER_DELTA);
+    tf.losses.meanSquaredError(yTrue, yPred);
   const weightedColorLoss = (yTrue: tfType.Tensor, yPred: tfType.Tensor) =>
     tf.tidy(() =>
       tf.metrics.categoricalCrossentropy(yTrue, yPred).mul(COLOR_LOSS_WEIGHT)

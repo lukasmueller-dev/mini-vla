@@ -1,6 +1,6 @@
 [project]
 name = "mini-vla"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python model-development source for the mini-vla language-conditioned vision-language-action policy (Keras). The js/ tree is the ported in-browser artifact for the portfolio."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -63,8 +63,8 @@ class ModelConfig:
     # Weight of the auxiliary attention-map loss (see model.py): cross-entropy
     # between the spatial attention map and the commanded block's grid cell.
     # WHY IT EXISTS: the action loss alone cannot train the attention — with a
-    # near-uniform 16×16 map the softmax Jacobian dilutes its gradient by
-    # ~1/256, and the map never sharpens. CE through the softmax has an
+    # near-uniform 12×12 map the softmax Jacobian dilutes its gradient by
+    # ~1/144, and the map never sharpens. CE through the softmax has an
     # undiluted (map − label) gradient, and the supervision is free — the expert
     # already knows which block it labeled.
     mapLossWeight: float = 1.5
@@ -105,7 +105,7 @@ class ModelConfig:
     gripperLossWeight: float = 1.0
     # Vision CNN stack, in order. The LAST stage's output map is what the
     # language-conditioned spatial attention scores (see model.py) — its spatial
-    # size sets the attention grid (64 → two pools → 16×16 here), and its
+    # size sets the attention grid (48 → two pools → 12×12 here), and its
     # `filters` sets the attention query width.
     conv: list[ConvLayer] = field(
         default_factory=lambda: [
