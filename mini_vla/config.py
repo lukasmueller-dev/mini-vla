@@ -153,7 +153,7 @@ class ConvergeConfig:
     # Hard floor of batches before convergence can fire.
     minBatches: int = 100
     # Fixed-budget fallback: converge regardless of loss at this batch.
-    maxBatches: int = 450
+    maxBatches: int = 800
 
 
 @dataclass
@@ -235,7 +235,7 @@ class BlockConfig:
     # than the policy's reach floor and closed-loop grasps miss small blocks
     # (measured graspRate ~0.13 at 0.08).
     min: float = 0.12
-    max: float = 0.16
+    max: float = 0.14
 
 
 @dataclass

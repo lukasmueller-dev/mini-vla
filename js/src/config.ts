@@ -229,7 +229,7 @@ export const CONFIG = {
           fixes it, so a longer budget only delays the fallback. Detectable
           early (smoothLoss > 0.4 at batch ~120); an auto-restart in
           trainer.core is the real fix if this rate bothers us. */
-      maxBatches: 450,
+      maxBatches: 800,
     },
     // Main-optimizer Adam LR schedule (src/trainer.core). The flat
     // model.learningRate is the COMPILE-time default; the loop overrides the LR
@@ -292,7 +292,7 @@ export const CONFIG = {
         graspRate ~0.13). 0.12 gives ±0.035+ and restores healthy grasping
         while keeping a 0.12-0.16 size spread for the size-reading task. */
     min: 0.12,
-    max: 0.16,
+    max: 0.14,
   },
 
   // ── Learned gripper (src/geometry.ts, model.ts, Hero.tsx) ──────────
