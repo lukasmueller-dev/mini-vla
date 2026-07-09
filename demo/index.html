@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mini-vla · demo</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #fafafa;
+        color: #1a1a1a;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        padding: 32px 16px;
+      }
+      h1 { font-size: 18px; font-weight: 600; margin: 0; }
+      .sub { color: #777; margin: -10px 0 4px; }
+      .panels { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
+      .panel {
+        background: #fff;
+        border: 1px solid #eaeaea;
+        border-radius: 10px;
+        padding: 10px 10px 6px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      }
+      .panel .label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #999;
+        margin-bottom: 6px;
+      }
+      canvas { display: block; width: 260px; height: 240px; }
+      .bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: center; }
+      button {
+        font: inherit;
+        padding: 7px 14px;
+        border-radius: 8px;
+        border: 1px solid #d5d5d5;
+        background: #111;
+        color: #fff;
+        cursor: pointer;
+      }
+      button.ghost { background: #fff; color: #111; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .readout { color: #555; }
+      .readout b { color: #111; font-variant-numeric: tabular-nums; }
+      .prompt { color: #333; min-height: 1.4em; }
+      a { color: #e12d1a; }
+    </style>
+  </head>
+  <body>
+    <h1>mini-vla</h1>
+    <div class="sub">a live in-browser vision-language-action policy (TF.js) vs. an IK expert</div>
+    <div class="prompt" id="prompt">press Start Training</div>
+    <div class="panels">
+      <div class="panel">
+        <div class="label">Demonstration (IK expert)</div>
+        <canvas id="demo"></canvas>
+      </div>
+      <div class="panel">
+        <div class="label">Policy rollout</div>
+        <canvas id="rollout"></canvas>
+      </div>
+    </div>
+    <div class="bar">
+      <button id="primary">Start Training</button>
+      <button id="reset" class="ghost">Reset</button>
+      <div class="readout">
+        <span id="status">idle</span> · loss <b id="loss">—</b> ·
+        <b id="batches">0</b> batches
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
