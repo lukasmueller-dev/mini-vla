@@ -6,26 +6,26 @@
   "license": "MIT",
   "sideEffects": false,
   "exports": {
-    "./trainer": "./src/trainer.ts",
-    "./trainer.core": "./src/trainer.core.ts",
-    "./rollout": "./src/rollout.ts",
-    "./scene": "./src/scene.ts",
-    "./task": "./src/task.ts",
-    "./geometry": "./src/geometry.ts",
-    "./config": "./src/config-public.ts",
-    "./model": "./src/model.ts",
+    "./trainer": "./js/src/trainer.ts",
+    "./trainer.core": "./js/src/trainer.core.ts",
+    "./rollout": "./js/src/rollout.ts",
+    "./scene": "./js/src/scene.ts",
+    "./task": "./js/src/task.ts",
+    "./geometry": "./js/src/geometry.ts",
+    "./config": "./js/src/config-public.ts",
+    "./model": "./js/src/model.ts",
     "./package.json": "./package.json"
   },
   "files": [
-    "src",
+    "js/src",
     "assets"
   ],
   "scripts": {
-    "demo": "vite demo",
-    "build:demo": "vite build demo",
-    "eval": "node eval/run.mjs",
-    "typecheck": "tsc --noEmit",
-    "gen:embeddings": "node scripts/gen-embeddings-data.mjs"
+    "demo": "vite js/demo",
+    "build:demo": "vite build js/demo",
+    "eval": "node js/eval/run.mjs",
+    "typecheck": "tsc --noEmit -p js",
+    "gen:embeddings": "node js/scripts/gen-embeddings-data.mjs"
   },
   "peerDependencies": {
     "@tensorflow/tfjs": "^4.22.0"

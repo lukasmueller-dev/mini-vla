@@ -3,14 +3,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+// repo root is two levels up (js/eval/ → js/ → repo root); assets/ lives there,
+// shared with the Python package.
+const root = fileURLToPath(new URL("../..", import.meta.url));
 const assetsDir = path.join(root, "assets");
 
-// Serve the package's assets/ at /vla so loadEmbeddings()'s default assetBase
-// ("/vla") resolves with zero host wiring — the same path the portfolio copies
-// its assets into (public/vla/). Also allow Vite to read the sibling src/ (the
-// demo imports the package source directly, and the trainer's module Worker
-// lives there).
+// Same asset serving as the demo: expose assets/ at /vla so loadEmbeddings()'s
+// default assetBase resolves, and allow reading the sibling src/.
 export default defineConfig({
   server: {
     fs: { allow: [root] },
