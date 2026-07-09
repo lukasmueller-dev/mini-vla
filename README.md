@@ -18,6 +18,66 @@ browser demo retrains from scratch (that's its whole point), so `js/` mirrors th
 network shape, the task, the config, and the silhouette render — never a trained
 checkpoint.
 
+## Architecture
+
+The policy is a **language-conditioned spatial-attention** network, not a
+flatten→dense fusion — trained by **behavioral cloning against an analytical IK
+expert**, with no reward or simulator rollout collection. See
+[`mini_vla/model.py`](mini_vla/model.py) for the layer-by-layer build.
+
+Three inputs drive one forward pass, re-run closed-loop every few frames during
+rollout:
+
+| input | shape | what it's for |
+|---|---|---|
+| `vision_pixels` | `imgSize × imgSize × 3` | model's-eye silhouette render of the scene |
+| `language_tokens` | `MAX_SEQ_LEN` | tokenized command, ids into a frozen pretrained GloVe table |
+| `carry_flag` | `1` | is the gripper already holding a block? — disambiguates "go pick" vs. "come home" for the identical (scene, sentence) |
+
+**Language branch.** Token ids look up a **frozen** 50-d GloVe embedding; a
+linear `Conv1D` (kernel 7 — each token scored together with its ±3-token
+neighborhood) scores every token, and a masked softmax attention-pools the
+sequence into a single vector — the language slot the rest of the network
+reads. Only the scorer (and the heads downstream) fine-tune; the embedding
+table itself never moves, so unseen near-synonyms ride along on the frozen
+GloVe geometry. A text-only warm-up phase pretrains this branch (+ an
+auxiliary color-classification head) before the vision branch joins the loss.
+
+**Vision branch → spatial attention, not concat-and-flatten.** A small
+config-driven conv stack (`mini_vla/config.py`'s `ModelConfig.conv` — 3 conv
+layers, relu, 2 max-pools by default) turns the silhouette into a `G×G`
+feature map. Vision and language meet through an explicit attention readout:
+
+1. the pooled language vector + `carry_flag` form a query;
+2. the query is dot-producted against every cell of the `G×G` map and
+   softmaxed into an attention map — "where the model is looking";
+3. a **frozen soft-argmax kernel** turns that map into an expected `(x̂, ŷ)`
+   image coordinate (gradients still flow through it — only the kernel is
+   fixed, seeded post-build from each cell's grid center);
+4. the same attention map reads out an attention-weighted feature vector —
+   what the map "sees" at that spot (block size, local shape).
+
+**Fusion + heads.** `(x̂, ŷ)` + the attended feature vector + the language
+vector + `carry_flag` concatenate into one small dense fusion layer, which
+feeds four heads: the target joint angles (Huber regression), a
+color-classification head (auxiliary, off the language vector alone), the
+attention map itself (auxiliary supervision, categorical cross-entropy against
+the commanded block's known grid cell — without it the action loss alone
+under-trains the attention), and a sigmoid "close gripper now" command (binary
+cross-entropy).
+
+**Training labels come from geometry, not demonstrations.** Each batch
+synthesizes random scenes, arm poses, and commands, renders the silhouette
+through the same pipeline the live rollout uses, and labels it directly: the
+target joint angles come from closed-form 2-link inverse kinematics toward the
+commanded block (or home, if `carry_flag` is set), the attention-map label
+comes from that block's known grid cell, and the gripper label comes from a
+shared geometric "is the effector fully over the block" predicate — the same
+predicate the closed-loop rollout and eval use to score a grasp. At rollout
+time there's no ground truth: the model predicts, the arm steps proportionally
+toward the target, the gripper closes on the learned head's rising edge, and
+the loop repeats until it settles.
+
 ## Python (develop here)
 
 ```bash
