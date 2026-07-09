@@ -82,8 +82,8 @@ the loop repeats until it settles.
 
 ```bash
 uv venv --python 3.12 && uv pip install -e .   # or: pip install -e .
-python train.py                                # 8 colors, 4 blocks → converge → grasp-rate
-python train.py --colors 4 --blocks 3 --wandb  # track a run
+python train.py                                # desktop preset: 8 colors, 4 blocks → converge → grasp-rate
+python train.py --preset mobile --wandb        # mobile preset: 4 colors, 3 blocks, track a run
 python train.py --set model.mapLossWeight:2.5 model.learningRate:0.003 --probe 25
 ```
 

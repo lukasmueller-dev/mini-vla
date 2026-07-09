@@ -2,8 +2,8 @@
 """Train the mini-vla policy headless, with optional wandb tracking.
 
 Examples:
-    python train.py                                  # defaults: 8 colors, 4 blocks
-    python train.py --colors 4 --blocks 3 --wandb
+    python train.py                                  # desktop preset: 8 colors, 4 blocks
+    python train.py --preset mobile --wandb          # mobile preset: 4 colors, 3 blocks
     python train.py --set model.mapLossWeight:2.5 model.learningRate:0.003
     python train.py --max-batches 600 --probe 25 --eval-episodes 32
 
@@ -31,8 +31,12 @@ BROWSER_BUDGET_SECONDS = 30.0
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train the mini-vla policy.")
-    p.add_argument("--colors", type=int, default=8, choices=[2, 4, 8], help="palette size")
-    p.add_argument("--blocks", type=int, default=4, choices=[2, 3, 4], help="scene density cap")
+    p.add_argument(
+        "--preset",
+        choices=["desktop", "mobile"],
+        default="desktop",
+        help="scene-difficulty profile (desktop=8c/4b hardest, mobile=4c/3b)",
+    )
     p.add_argument(
         "--set",
         nargs="*",
@@ -56,12 +60,13 @@ def main() -> None:
 
     # 1) Apply overrides BEFORE importing the heavy modules (see module docstring).
     from mini_vla import config as cfg
-    from mini_vla.run_config import RunConfig, set_run_config
+    from mini_vla.run_config import PRESETS, set_run_config
 
     for kv in args.set:
         path, _, val = kv.partition(":")
         cfg.override(path, float(val))
-    set_run_config(RunConfig(numColors=args.colors, maxBlocks=args.blocks))
+    rc = PRESETS[args.preset]
+    set_run_config(rc)
 
     # 2) Now the modules that snapshot CONFIG can be imported.
     import tensorflow as tf
@@ -81,8 +86,9 @@ def main() -> None:
             project=args.wandb_project,
             name=args.wandb_run,
             config={
-                "colors": args.colors,
-                "blocks": args.blocks,
+                "preset": args.preset,
+                "colors": rc.numColors,
+                "blocks": rc.maxBlocks,
                 "seed": args.seed,
                 "overrides": args.set,
                 "model": dataclasses.asdict(cfg.CONFIG.model),
@@ -95,7 +101,8 @@ def main() -> None:
     if args.max_batches is not None:
         trainer.max_batches_override = args.max_batches
 
-    print(f"[train] building model (colors={args.colors} blocks={args.blocks})…")
+    print(f"[train] building model (preset={args.preset} "
+          f"colors={rc.numColors} blocks={rc.maxBlocks})…")
     t0 = time.time()
     last_print = [0.0]
 
