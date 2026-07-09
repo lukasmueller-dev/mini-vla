@@ -8,7 +8,9 @@
 # the commanded block?"); a spatial softmax turns the score row into an
 # attention map; and the readout is the map's SOFT-ARGMAX — the expected (x, y)
 # image coordinate under the map — plus its attention-weighted feature vector. A
-# small dense head then regresses the target joint angles.
+# small dense head then regresses the target joint angles as CIRCULAR coords
+# (cosθ, sinθ per joint; recovered with atan2 at readout) so a wrong-side pick
+# is a bounded error, not an outlier tail.
 #
 # Language: ONE attention-pooled slot with a LOCAL-CONTEXT (conv) scorer. A
 # conv1d scorer (kernel 7 over the token axis, linear) scores every token from
@@ -88,7 +90,9 @@ class AttentionPooling(tf.keras.layers.Layer):
 @dataclass
 class VLAModels:
     # Main policy (the one that trains): [vision, tokens, carry] →
-    # [action angles (2), color softmax, attention map [G*G], gripper (1)].
+    # [action circular coords (cosθ1,sinθ1,cosθ2,sinθ2), color softmax,
+    # attention map [G*G], gripper (1)]. Angles are recovered from the 4 action
+    # outputs with atan2 in trainer.predict_target.
     model: tf.keras.Model
     # Inference/readout twin sharing every layer: [vision, tokens, carry] →
     # [action, attention map, gripper]. One predict yields all three.
@@ -167,7 +171,18 @@ def build_vla_model(embed_matrix: np.ndarray) -> VLAModels:
     # fusion + heads.
     fused = L.Concatenate(name="fusion_in")([pick_xy, pick_feat, lang_target, carry_input])
     dense1 = L.Dense(CONFIG.model.fusionUnits, activation="relu", name="fusion")(fused)
-    action_output = L.Dense(2, activation="linear", name="action")(dense1)
+    # ACTION as CIRCULAR coordinates, not raw angles: 4 outputs =
+    # (cosθ1, sinθ1, cosθ2, sinθ2), the target angles projected onto the unit
+    # circle (trainer builds the label; trainer.predict_target recovers the
+    # angle with atan2, CPU-side, like attention_weights). WHY: a raw-angle
+    # regression makes a wrong-SIDE pick a ~4.3-rad outlier that dominates MSE
+    # (the reason the old head needed a Huber delta); on the circle that same
+    # miss is a BOUNDED error (each component ∈ [-1, 1]), so plain MSE keeps the
+    # correct-side precision floor low without a robust-loss hack, and the
+    # discontinuity-free target is smoother to fit. Linear (not tanh) output —
+    # atan2 only reads the direction, so leaving the radius free avoids tanh
+    # saturation near ±1 slowing the fit.
+    action_output = L.Dense(4, activation="linear", name="action")(dense1)
     color_output = L.Dense(len(COLORS), activation="softmax", name="color")(lang_target)
     # gripper COMMAND: a learned "close now" head (0=open → 1=closed). It reads
     # the fused hidden dense1 — being "over the block" is a VISUAL fact. Trained
@@ -210,13 +225,18 @@ def build_vla_model(embed_matrix: np.ndarray) -> VLAModels:
     q.set_weights([q_kernel * (1.0 / math.sqrt(C)), q_bias])
 
     # Keras supports loss_weights natively (tfjs-layers didn't — hence its custom
-    # weighted losses). action = Huber (the wrong-side outlier tail otherwise
-    # dominates); color/map = categorical CE; gripper = binary CE. The map is
-    # already a softmax and the label is a bilinear distribution → plain CE.
+    # weighted losses). action = plain MSE now that the target is on the unit
+    # circle (bounded components → no wrong-side outlier tail → the Huber delta
+    # the raw-angle head needed is gone); color/map = categorical CE; gripper =
+    # binary CE. The map is already a softmax and the label is a bilinear
+    # distribution → plain CE. NOTE the scales stay comparable to the old
+    # Huber-on-angle: near the target the circle map has unit speed, so the
+    # per-component MSE equals the small-error Huber — the converge.loss
+    # threshold carries over unchanged.
     model.compile(
         optimizer=tf.keras.optimizers.Adam(LEARNING_RATE),
         loss=[
-            tf.keras.losses.Huber(delta=ACTION_HUBER_DELTA),
+            tf.keras.losses.MeanSquaredError(),
             tf.keras.losses.CategoricalCrossentropy(),
             tf.keras.losses.CategoricalCrossentropy(),
             tf.keras.losses.BinaryCrossentropy(),

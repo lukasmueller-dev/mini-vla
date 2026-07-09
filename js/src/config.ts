@@ -30,13 +30,17 @@ export interface ConvLayer {
 export const CONFIG = {
   // ── Model architecture + optimizer (src/model.ts) ──────────────────
   model: {
-    /** Square input resolution fed to the CNN. Raised 32→64 lets the policy
-        resolve WHERE in its placement band a block sits (block ~8px, band
-        ~12px) so it reaches precisely; at 32 the position blurred to ~3px and
-        it could only learn the per-band mean target. The CNN and attention
-        grid adapt symbolically, so this is the only downstream knob — but
-        per-batch vision compute scales ~4x vs 32. Keep RENDER_SIZE ≈ 4x this. */
-    imgSize: 64,
+    /** Square input resolution fed to the CNN. Lowered 64→48 in the 2026-07
+        sweep: per-batch vision compute is ~quadratic in this (48 is ~0.56× the
+        cost of 64), and that per-batch saving is what pulls the est. browser
+        train time UNDER the 30s budget. The old "32 was too blurry to resolve
+        within-band position" floor no longer binds — sin/cos action coords +
+        the spatial attention readout now carry the position signal, so grasp
+        precision held at 48 (5-seed grasp actually rose vs 64). The CNN and
+        attention grid adapt symbolically (48 → two pools → 12×12 grid), so this
+        stays the only downstream knob. Keep RENDER_SIZE ≈ 4x this (256 is 5.3×,
+        ample antialiasing headroom — the ≈4× guidance is a floor). */
+    imgSize: 48,
     /** Adam learning rate. 0.005 won the 2026-07 sweep at batchSize 32 /
         imgSize 64: 0.008 was collapse-prone (side-binding failure on bad
         seeds) and 0.003 measurably slower without being more reliable. */
@@ -49,8 +53,8 @@ export const CONFIG = {
     /** Weight of the auxiliary attention-map loss (see model.ts): cross-
         entropy between the spatial attention map and the commanded block's
         grid cell. WHY IT EXISTS: the action loss alone cannot train the
-        attention — with a near-uniform 16×16 map the softmax Jacobian dilutes
-        its gradient by ~1/256, and the map never sharpens (measured: loss
+        attention — with a near-uniform 12×12 map the softmax Jacobian dilutes
+        its gradient by ~1/144, and the map never sharpens (measured: loss
         flat at the ~0.78 language-only plateau for 300+ batches). CE through
         the softmax has an undiluted (map − label) gradient, and the
         supervision is free — the expert already knows which block it
@@ -64,8 +68,12 @@ export const CONFIG = {
         (measured: gaze accurate to 0.003 while the reach still missed by
         0.10). This is plain feature standardization — the kernel is frozen,
         so the gain is exact, not a learned scale that early training could
-        squash. */
-    attnCoordGain: 32,
+        squash. Raised 32→48 in the 2026-07 sweep: amplifying the position
+        signal further was the single biggest grasp win (5-seed mean +17,
+        worst-seed up markedly). It has a peak — 24 collapsed a seed to 0%
+        grasp and 64 overshot (worse than 48) — so 48 is the optimum, not a
+        "more is better" knob. */
+    attnCoordGain: 48,
     /** Huber transition point for the action loss. The two IK target clusters
         (commanded block left vs. right) sit ~4.3 rad apart, so plain MSE lets
         the rare (~1%) wrong-side pick (cost ~9.3) dominate over regression
@@ -79,14 +87,25 @@ export const CONFIG = {
         the sigmoid "close now" head, see model.ts). Small like the color head:
         the gripper is an easy, near-deterministic function of "is the effector
         over the block", so it needs only a light nudge — but non-zero, or the
-        head has no gradient and collapses to a constant. Raise toward ~0.6 (and
-        raise trainer.graspFrac) if the head learns "always closed". */
-    gripperLossWeight: 0.3,
+        head has no gradient and collapses to a constant. Raised 0.3→0.6 (and
+        trainer.graspFrac 0.15→0.3): mirror augmentation (trainer.core synthBatch)
+        halves the batch's UNIQUE scene draws (each is duplicated as its exact
+        mirror), and the already-sparse grasp-now positive class collapsed onto
+        the carry_flag shortcut ("closed iff carrying", ignoring the harder
+        visual "over the block" cue) at the old weight/frac — measured:
+        positive-class mean prediction 0.09 vs negative 0.06 (no discrimination)
+        and 0% closed-loop grasp rate. Both raised together restored
+        discrimination (0.51 vs 0.12) and grasp rate (42%, above the pre-mirror
+        baseline's 35%). Raised again 0.6→1.0 in the combined-config sweep: with
+        reach precision handled by sin/cos + attnCoordGain, the remaining
+        worst-SEED failures were the gripper (good reach loss but a low
+        grip-accuracy seed), and 1.0 gave the best worst-seed reliability. */
+    gripperLossWeight: 1.0,
     /** Vision CNN stack, in order. Add/remove entries to change depth; edit
         filters/kernel/stride/pool to retune a stage. The LAST stage's output
         map is what the language-conditioned spatial attention scores (see
-        model.ts) — its spatial size sets the attention grid (64 → two pools →
-        16×16 here), and its `filters` sets the attention query width. Keep the
+        model.ts) — its spatial size sets the attention grid (48 → two pools →
+        12×12 here), and its `filters` sets the attention query width. Keep the
         final map reasonably fine: the soft-argmax readout interpolates BELOW
         cell size, but the "does this cell match the command" scoring can only
         separate blocks that land in different cells. */
@@ -132,8 +151,14 @@ export const CONFIG = {
         phase cue is the PROPRIOCEPTIVE FLAG plus the carried block's pixels —
         pre-flag, pixels were the ONLY cue, and when vision missed it the
         action head averaged the grasp/carry modes (see the carry-flag note
-        in model.ts). UNTUNED. */
-    carryFrac: 0.5,
+        in model.ts). Lowered from 0.5: REST is a CONSTANT label regardless of
+        scene/command, so carry samples are near-trivial next to the reach
+        subtask (language-conditioned localization + coordinate→angle
+        regression) — at 0.5 they ate half the batch's gradient budget for one
+        of the easiest facts to learn. 0.3 still gives the carry-phase attention
+        target (tracking the effector) steady coverage without starving the hard
+        subtask. */
+    carryFrac: 0.3,
     /** Fraction of the EMPTY-HANDED samples posed as "grasp-now" positives: the
         commanded block's IK pose, tightly jittered so the effector sits fully
         over the block (gripper.radius) and the gripper label is 1 ("close"). WHY
@@ -143,8 +168,11 @@ export const CONFIG = {
         steady stream of clean close-now examples. The action label stays the
         grasp pose (stay put); the gripper label still comes from the shared
         effectorOverBlock predicate, so a jitter that strays off the block is
-        correctly labeled 0 — the class only BIASES the pose distribution. */
-    graspFrac: 0.15,
+        correctly labeled 0 — the class only BIASES the pose distribution.
+        Raised 0.15→0.3 alongside model.gripperLossWeight — see that field's
+        comment for why (mirror augmentation halves this class's unique-scene
+        diversity). */
+    graspFrac: 0.3,
     /** Gaussian spread (rad) of the grasp-class pose jitter — tight so the
         effector reliably stays fully over the (possibly smallest) block. */
     graspJitterStd: 0.05,
@@ -202,6 +230,32 @@ export const CONFIG = {
           early (smoothLoss > 0.4 at batch ~120); an auto-restart in
           trainer.core is the real fix if this rate bothers us. */
       maxBatches: 450,
+    },
+    // Main-optimizer Adam LR schedule (src/trainer.core). The flat
+    // model.learningRate is the COMPILE-time default; the loop overrides the LR
+    // per batch from this schedule: a linear ramp start→peak over
+    // warmupBatches, then inverse-time decay toward floor. The side-binding
+    // collapse risk a flat high LR carries (see model.learningRate's history)
+    // lives in the fragile OPENING phase — ramping past it, once
+    // mirror-balanced batches have de-risked that phase, reaches the faster
+    // regime without starting training on the cliff edge.
+    lrSchedule: {
+      /** Adam LR at batch 0 — conservative, since the side-binding collapse
+          risk lives in this fragile opening phase. */
+      start: 0.003,
+      /** Ramp target, reached at warmupBatches. 0.008 flat was collapse-prone
+          in the 2026-07 sweep; mirror-balanced batches (synthBatch pairs every
+          scene with its exact mirror) remove the side-binding failure mode that
+          made it risky, so the fast regime is reachable once past the opening. */
+      peak: 0.008,
+      /** Batches to linearly ramp start→peak. */
+      warmupBatches: 40,
+      /** Floor the post-peak decay asymptotically approaches (inverse-time
+          decay — never fully reaches it, by design). */
+      floor: 0.004,
+      /** Inverse-time decay half-life (batches) after the peak: lr(t) = floor +
+          (peak-floor)/(1+t/decayHalfLife), t = batches since warmupBatches. */
+      decayHalfLife: 150,
     },
   },
 
@@ -271,7 +325,7 @@ export const CONFIG = {
     /** Extra clearance (workspace units) required between two same-side blocks'
         silhouettes, on top of their (boosted) half-widths — keeps them from
         occluding each other AND lands them in different attention cells (one
-        16×16 cell ≈ 0.078 units) so the map can score them apart. */
+        12×12 cell ≈ 0.10 units) so the map can score them apart. */
     minBlockGap: 0.03,
     /** Grammar sampling probabilities: chance a sentence gets a leading filler
         word, and a trailing "please". */

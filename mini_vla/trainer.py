@@ -82,6 +82,25 @@ CONVERGE_STREAK = _T.converge.streak
 MIN_BATCHES = _T.converge.minBatches
 MAX_BATCHES = _T.converge.maxBatches
 
+LR_START = _T.lrSchedule.start
+LR_PEAK = _T.lrSchedule.peak
+LR_WARMUP_BATCHES = _T.lrSchedule.warmupBatches
+LR_FLOOR = _T.lrSchedule.floor
+LR_DECAY_HALFLIFE = _T.lrSchedule.decayHalfLife
+
+
+def _scheduled_lr(batch: int) -> float:
+    """Main-optimizer Adam LR at this batch index: linear ramp LR_START→LR_PEAK
+    over LR_WARMUP_BATCHES, then inverse-time decay toward LR_FLOOR. The
+    collapse risk a flat high LR carries (config.py's learningRate history)
+    lives in the fragile OPENING phase — ramping past it (once mirror-balanced
+    batches have de-risked that phase) reaches the faster regime without
+    starting training on the cliff edge."""
+    if batch < LR_WARMUP_BATCHES:
+        return LR_START + (LR_PEAK - LR_START) * (batch / LR_WARMUP_BATCHES)
+    t = batch - LR_WARMUP_BATCHES
+    return LR_FLOOR + (LR_PEAK - LR_FLOOR) / (1.0 + t / LR_DECAY_HALFLIFE)
+
 N_COLORS = len(COLORS)
 CELLS = ATTN_GRID * ATTN_GRID
 
@@ -130,6 +149,26 @@ def _argmax_row(a: np.ndarray, row: int, width: int) -> int:
         if a[base + k] > a[base + best]:
             best = k
     return best
+
+
+def _angles_from_circular(cos1: float, sin1: float, cos2: float, sin2: float) -> tuple[float, float]:
+    """Recover (θ1, θ2) from the model's 4 circular action outputs (see model.py).
+    atan2 reads only the DIRECTION, so the unconstrained radius is harmless. θ1
+    is un-wrapped into solve_ik's [-π/2, 3π/2) band (geometry.py) so the rollout,
+    which steps proportionally FROM the current pose, moves the short way round
+    (a raw atan2 in (-π, π] could report a near-π target as its negative twin)."""
+    t1 = math.atan2(sin1, cos1)
+    while t1 < -math.pi / 2:
+        t1 += 2 * math.pi
+    t2 = math.atan2(sin2, cos2)
+    return t1, t2
+
+
+def _angle_err(pred: float, label: float) -> float:
+    """Signed circular difference (pred − label) wrapped into (-π, π] — so the
+    probe's angle-space Huber is correct across the wrap seam."""
+    d = (pred - label + math.pi) % (2 * math.pi) - math.pi
+    return d
 
 
 class VLATrainer:
@@ -195,16 +234,31 @@ class VLATrainer:
         return u, v
 
     def synth_batch(self, n: int, force_carry: Optional[bool] = None) -> Batch:
+        """Synthesizes n//2 scenes and pairs each with its MIRROR twin (n odd
+        synthesizes one extra unmirrored). The task is exactly left-right
+        symmetric about the arm base (config.arm.base x=0.5 — verified: fk()'s
+        effector mirrors as ex' = 2*base_x - ex = 1 - ex, and render_silhouette's
+        pixel base sits at exactly the image's horizontal center regardless of
+        pose), so a rendered scene's array-flip is pixel-equivalent to
+        re-rendering the truly mirrored scene (empirically checked: <2% of
+        pixels differ, by antialiasing rounding only) — a second training sample
+        for ZERO extra renders. Every label transforms in closed form:
+        (θ1,θ2)→(π−θ1,−θ2) [REST maps to itself], the map's columns mirror,
+        carry/color/gripper/language are invariant (gripper: algebraically the
+        two half-width containment conditions just swap under the mirror).
+        Pairing this way SIDE-BALANCES every batch by construction — directly
+        countering the side-binding collapse — at half the render cost."""
         vis = np.zeros((n, IMG_SIZE, IMG_SIZE, 3), dtype=np.float32)
         lang = np.zeros((n, MAX_SEQ_LEN), dtype=np.int32)
         carry_f = np.zeros((n, 1), dtype=np.float32)
-        ys_a = np.zeros((n, 2), dtype=np.float32)
+        # action label = circular coords (cosθ1, sinθ1, cosθ2, sinθ2), see model.py
+        ys_a = np.zeros((n, 4), dtype=np.float32)
         ys_c = np.zeros((n, N_COLORS), dtype=np.float32)
         ys_m = np.zeros((n, CELLS), dtype=np.float32)
         ys_g = np.zeros((n, 1), dtype=np.float32)
         ys_m_flat = ys_m.reshape(-1)
 
-        for i in range(n):
+        def synth_one(idx: int) -> None:
             layout = random_layout()
             sentence = sample_command(layout)  # acted-on color is present in scene
             target = block_of_color(layout, sentence.color)
@@ -216,7 +270,7 @@ class VLATrainer:
             # among empty-handed samples, a GRASP_FRAC share are "grasp-now"
             # positives posed tightly at the block's IK grasp pose.
             grasp_now = (not mid_carry) and random.random() < GRASP_FRAC
-            carry_f[i, 0] = 1.0 if mid_carry else 0.0
+            carry_f[idx, 0] = 1.0 if mid_carry else 0.0
 
             if not mid_carry:
                 t1, t2 = ik_to_x(target.x, target.size, trest)  # reach: grasp point
@@ -236,22 +290,25 @@ class VLATrainer:
             # THE gripper label (the shared invariant): close iff already carrying
             # or the effector is fully over the commanded block. Identical
             # predicate to the rollout grasp gate.
-            ys_g[i, 0] = 1.0 if (mid_carry or effector_over_block(a1, a2, target.as_block(), GRIP_RADIUS)) else 0.0
+            ys_g[idx, 0] = 1.0 if (mid_carry or effector_over_block(a1, a2, target.as_block(), GRIP_RADIUS)) else 0.0
 
-            # ABSOLUTE target joint angles (not a delta from the sampled pose).
-            ys_a[i, 0] = t1
-            ys_a[i, 1] = t2
-            ys_c[i, sentence.color] = 1.0
+            # ABSOLUTE target joint angles (not a delta from the sampled pose),
+            # projected onto the unit circle (recovered via atan2 at readout).
+            ys_a[idx, 0] = math.cos(t1)
+            ys_a[idx, 1] = math.sin(t1)
+            ys_a[idx, 2] = math.cos(t2)
+            ys_a[idx, 3] = math.sin(t2)
+            ys_c[idx, sentence.color] = 1.0
             # attention supervision (phase-INDEPENDENT): the commanded block
             # wherever it renders (rest spot, or the effector while carried).
             if mid_carry:
                 pu, pv = self._effector_uv(a1, a2)
             else:
                 pu, pv = self._block_uv(target.x, target.size, trest)
-            self._write_map_label(ys_m_flat, i * CELLS, pu, pv)
+            self._write_map_label(ys_m_flat, idx * CELLS, pu, pv)
 
             rgb = render_silhouette(a1, a2, layout, sentence.color if mid_carry else None)
-            vis[i] = to_model_input(rgb)
+            vis[idx] = to_model_input(rgb)
 
             # word-dropout: tokens that don't carry label information occasionally
             # become <unk> so the encoder learns to handle unknown words.
@@ -259,9 +316,35 @@ class VLATrainer:
                 tok = sentence.tokens[s]
                 if tok != PAD and tok not in LABEL_TOKEN_IDS and random.random() < WORD_DROPOUT:
                     tok = UNK
-                lang[i, s] = tok
+                lang[idx, s] = tok
 
-        return Batch(n=n, vis=vis, lang=lang, carryF=carry_f, ysA=ys_a, ysC=ys_c, ysMPick=ys_m, ysG=ys_g)
+        def mirror_into(src: int, dst: int) -> None:
+            """Fill `dst` as the exact horizontal mirror of already-filled `src`
+            — no render, no IK, just the closed-form transform (see docstring)."""
+            vis[dst] = vis[src, :, ::-1, :]
+            lang[dst] = lang[src]
+            carry_f[dst] = carry_f[src]
+            # (θ1,θ2)→(π−θ1,−θ2) in circular coords: cos(π−θ1)=−cosθ1,
+            # sin(π−θ1)=sinθ1, cos(−θ2)=cosθ2, sin(−θ2)=−sinθ2.
+            ys_a[dst, 0] = -ys_a[src, 0]
+            ys_a[dst, 1] = ys_a[src, 1]
+            ys_a[dst, 2] = ys_a[src, 2]
+            ys_a[dst, 3] = -ys_a[src, 3]
+            ys_c[dst] = ys_c[src]
+            ys_g[dst] = ys_g[src]
+            g = ATTN_GRID
+            ys_m[dst] = ys_m[src].reshape(g, g)[:, ::-1].reshape(-1)
+
+        half = n // 2
+        for k in range(half):
+            synth_one(2 * k)
+            mirror_into(2 * k, 2 * k + 1)
+        if n % 2:
+            synth_one(n - 1)
+
+        return Batch(
+            n=n, vis=vis, lang=lang, carryF=carry_f, ysA=ys_a, ysC=ys_c, ysMPick=ys_m, ysG=ys_g,
+        )
 
     def synth_lang_batch(self, n: int) -> tuple[np.ndarray, np.ndarray]:
         """A CHEAP language-only batch: sentences + color label, NO vision/IK/map.
@@ -353,15 +436,21 @@ class VLATrainer:
             action, color, _map, grip = self.models.model(
                 [b.vis, b.lang, b.carryF], training=False
             )
-            action = action.numpy().reshape(-1)
+            action = action.numpy()  # [n, 4] circular coords
             color = color.numpy().reshape(-1)
             grip = grip.numpy().reshape(-1)
-            ys_a = b.ysA.reshape(-1)
+            ys_a = b.ysA  # [n, 4] circular coords
             ys_c = b.ysC.reshape(-1)
             ys_g = b.ysG.reshape(-1)
+            # bucket metric stays ANGLE-space Huber (comparable across
+            # experiments): recover both pred & label angles from the circular
+            # coords, then Huber the wrapped per-joint error.
             s = 0.0
-            for k in range(b.n * 2):
-                s += self._huber(float(action[k] - ys_a[k]))
+            for i in range(b.n):
+                pt1, pt2 = _angles_from_circular(*action[i])
+                lt1, lt2 = _angles_from_circular(*ys_a[i])
+                s += self._huber(_angle_err(pt1, lt1))
+                s += self._huber(_angle_err(pt2, lt2))
             buckets["carry" if carry else "reach"] = s / (b.n * 2)
             for i in range(b.n):
                 if _argmax_row(color, i, N_COLORS) == _argmax_row(ys_c, i, N_COLORS):
@@ -386,6 +475,7 @@ class VLATrainer:
         self.status = "training"
         converge_streak = 0
         while True:
+            self.models.model.optimizer.learning_rate = _scheduled_lr(self.batches)
             loss = self.train_step()
             self.loss = loss
             if math.isnan(self.initial_loss):
@@ -432,7 +522,8 @@ class VLATrainer:
         l = np.asarray([tokens], dtype=np.int32)
         c = np.asarray([[1.0 if carry is not None else 0.0]], dtype=np.float32)
         action, pick, grip = self.models.viz([v, l, c], training=False)
-        action = action.numpy().reshape(-1)
+        action = action.numpy().reshape(-1)  # [cosθ1, sinθ1, cosθ2, sinθ2]
+        t1, t2 = _angles_from_circular(*action)
         attn = pick.numpy().reshape(-1)
         grip = float(grip.numpy().reshape(-1)[0])
 
@@ -448,7 +539,7 @@ class VLATrainer:
                 peak = w
         inv = 1.0 / peak if peak > 0 else 0.0
         return PredictResult(
-            target=(float(action[0]), float(action[1])),
+            target=(t1, t2),
             attn=attn * inv,
             xy=(ux / g, vy / g),
             grip=grip,

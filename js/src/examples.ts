@@ -7,9 +7,10 @@
 // The word inventory lives in assets/grammar.json (single source of truth
 // shared with the Python package mini_vla/task.py and the embedding generator
 // scripts/gen-embeddings-data.mjs). Which colors/densities are actually
-// SAMPLED is the user's ⚙ run config (src/run-config.ts): scenes place
-// 2..min(maxBlocks, numColors) blocks (≤2 per side band), colors drawn from
-// the first numColors palette entries without replacement — every block is a
+// SAMPLED is the active run config (src/run-config.ts — the DESKTOP / MOBILE
+// device-class profile the host installs): scenes place 2..min(maxBlocks,
+// numColors) blocks (≤2 per side band), colors drawn from activePalette (the
+// first numColors palette entries) without replacement — every block is a
 // unique color and the job is to localize the named one among up to four.
 //
 // Token ids index the pretrained GloVe table (vocab.gen.ts / public/vla/):
@@ -24,7 +25,7 @@
 import grammar from "../../assets/grammar.json";
 import { CONFIG } from "./config";
 import { BLOCK, BLOCK_MAX, BLOCK_MIN } from "./geometry";
-import { runConfig } from "./run-config";
+import { runConfig, type RunConfig } from "./run-config";
 import { CORE_VOCAB } from "./vocab.gen";
 
 export { VOCAB_SIZE } from "./vocab.gen";
@@ -40,6 +41,15 @@ export interface ColorDef {
 }
 
 export const COLORS: ColorDef[] = grammar.colors;
+
+/** The colors a run actually trains on: the palette's first `numColors`
+    entries — the SINGLE definition of the "first N" sampling rule randomLayout
+    draws from (see below). Exported so a host builds its preset command chips
+    from the same rule instead of a duplicated `COLORS.slice`; if the palette is
+    ever reordered, the chips and the scenes still agree by construction. */
+export function activePalette(cfg: RunConfig): ColorDef[] {
+  return COLORS.slice(0, cfg.numColors);
+}
 
 const LIFT_VERBS: string[][] = grammar.tasks.lift.verbs;
 const ARTICLES = grammar.articles;
@@ -201,8 +211,8 @@ export interface BlockPos {
 export type Layout = BlockPos[];
 
 /**
- * 2..min(maxBlocks, numColors) blocks per scene (both from the active ⚙ run
- * config), at most 2 per side band, each placed at a RANDOM position across
+ * 2..min(maxBlocks, numColors) blocks per scene (both from the active run
+ * config profile), at most 2 per side band, each placed at a RANDOM position across
  * its cleanly-reachable side of the floor. Colors are drawn from the first
  * numColors palette entries without replacement, so every block is a distinct
  * color and the named target is unambiguous — but vision has to pick it out
@@ -227,18 +237,20 @@ export type Layout = BlockPos[];
  * band's edges stay comfortably inside the joint ranges (verified: |θ2| ≤ 2.39
  * at the inner edges) and fully in-frame.
  *
- * Wide placement is only usable because the model input is now 64px (was 32,
- * see IMG_SIZE): a block renders ~8px and a band spans ~12px, so the ~0.9-rad
- * elbow swing across a band is resolvable to the target precision. At 32px the
- * position was unresolvable (~3px block), the policy learned the per-band MEAN
- * and landed off-centre — which is exactly why placement used to be pinned to
- * ±0.02. Raising the input resolution (the documented fix) is what lets the
+ * Wide placement stays usable at the model input's 48px (lowered 64→48 in the
+ * 2026-07 sweep, see IMG_SIZE): a block renders ~6px and a band spans ~9px, and
+ * the position signal for the ~0.9-rad elbow swing across a band now rides the
+ * sin/cos action coords + the spatial soft-argmax readout rather than raw pixel
+ * sharpness, so grasp precision held when imgSize dropped (5-seed grasp rose).
+ * At 32px the position was unresolvable (~3px block), the policy learned the
+ * per-band MEAN and landed off-centre — which is exactly why placement used to
+ * be pinned to ±0.02; the readout + resolution together are what let the
  * scatter widen back out.
  *
  * Each block also randomizes its SIDE LENGTH in [BLOCK_MIN, BLOCK_MAX]. Size
  * is not just cosmetic: the grasp target is the block CENTRE (y = size/2), so a
  * bigger block is grasped higher and the policy has to read the size out of the
- * 64px image to get the reach height right. It also shifts the near-singular
+ * 48px image to get the reach height right. It also shifts the near-singular
  * dead zone — the LARGEST block (grasped at y=0.08) needs |x−0.5| ≳ 0.181 to
  * keep the elbow inside THETA2_RANGE — so the band inner edges (0.31/0.69) are
  * set for that worst case; smaller blocks clear it with room to spare.
@@ -291,13 +303,17 @@ function placeSide(band: [number, number], colors: number[]): BlockPos[] {
 }
 
 export function randomLayout(): Layout {
-  const { numColors, maxBlocks } = runConfig();
+  const cfg = runConfig();
+  // activePalette is the ONE place the "first numColors" rule lives — draw the
+  // pool size from it (not cfg.numColors directly) so the scenes and the host's
+  // preset chips can never disagree about which colors this run trains.
+  const paletteN = activePalette(cfg).length;
   // colors are unique per scene, so the palette also caps the block count
-  const cap = Math.min(maxBlocks, numColors);
+  const cap = Math.min(cfg.maxBlocks, paletteN);
   const n = 2 + Math.floor(Math.random() * (cap - 1)); // uniform 2..cap
   // split across the two bands, ≤2 per band: 2 → 1+1, 4 → 2+2, 3 → coin flip
   const nL = n === 2 ? 1 : n === 4 ? 2 : Math.random() < 0.5 ? 1 : 2;
-  const colors = pickColors(n, numColors); // unique across the whole scene
+  const colors = pickColors(n, paletteN); // unique across the whole scene
   return [
     ...placeSide(PLACE_L, colors.slice(0, nL)),
     ...placeSide(PLACE_R, colors.slice(nL)),

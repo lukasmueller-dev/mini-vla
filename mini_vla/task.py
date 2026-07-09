@@ -24,7 +24,7 @@ from typing import Optional
 
 from .config import CONFIG
 from .geometry import BLOCK, BLOCK_MAX, BLOCK_MIN
-from .run_config import run_config
+from .run_config import RunConfig, run_config
 from .vocab_gen import CORE_VOCAB, VOCAB_SIZE  # noqa: F401  (VOCAB_SIZE re-exported)
 
 _GRAMMAR_PATH = Path(__file__).resolve().parent.parent / "assets" / "grammar.json"
@@ -43,6 +43,15 @@ class ColorDef:
 
 
 COLORS: list[ColorDef] = [ColorDef(**c) for c in _grammar["colors"]]
+
+
+def active_palette(rc: RunConfig) -> list[ColorDef]:
+    """The colors a run actually trains on: the palette's first numColors
+    entries — the SINGLE definition of the "first N" sampling rule random_layout
+    draws from. Mirrors examples.ts activePalette (the host builds its preset
+    chips from the same rule)."""
+    return COLORS[: rc.numColors]
+
 
 _LIFT_VERBS: list[list[str]] = _grammar["tasks"]["lift"]["verbs"]
 _ARTICLES: list[str] = _grammar["articles"]
@@ -261,11 +270,13 @@ def random_layout() -> Layout:
     each at a random position across its cleanly-reachable side of the floor.
     Colors are unique per scene."""
     rc = run_config()
-    cap = min(rc.maxBlocks, rc.numColors)  # colors are unique, so palette caps count
+    # active_palette is the ONE place the "first numColors" rule lives.
+    palette_n = len(active_palette(rc))
+    cap = min(rc.maxBlocks, palette_n)  # colors are unique, so palette caps count
     n = 2 + random.randrange(cap - 1)  # uniform 2..cap
     # split across the two bands, ≤2 per band: 2 → 1+1, 4 → 2+2, 3 → coin flip
     n_l = 1 if n == 2 else 2 if n == 4 else (1 if random.random() < 0.5 else 2)
-    colors = _pick_colors(n, rc.numColors)  # unique across the whole scene
+    colors = _pick_colors(n, palette_n)  # unique across the whole scene
     return [
         *_place_side(_PLACE_L, colors[:n_l]),
         *_place_side(_PLACE_R, colors[n_l:]),

@@ -4,12 +4,16 @@
 // layout, pose, command) states — random block placements, sentences from
 // the slot grammar with ~10% word-dropout to <unk> — renders each state
 // through the same silhouette pipeline the live rollout uses, labels it with
-// the analytical-IK expert's ABSOLUTE target joint angles (plus color for the
-// auxiliary head), and runs one trainOnBatch step. Grasping is now a LEARNED
-// action: a sigmoid gripper head is trained (BCE) to close exactly when the
-// effector is fully over the commanded block — the shared effectorOverBlock
-// predicate (geometry.ts) — and the rollout turns its rising edge into the
-// physical grasp (see Hero.tsx), instead of the old bare proximity snap.
+// the analytical-IK expert's ABSOLUTE target joint angles — as CIRCULAR coords
+// (cosθ,sinθ per joint, recovered with atan2 at readout; see model.ts), plus
+// color for the auxiliary head — and runs one trainOnBatch step. Every batch is
+// MIRROR-PAIRED (synthBatch): each synthesized scene is duplicated as its exact
+// horizontal mirror, side-balancing the batch by construction (countering the
+// side-binding collapse) at half the render cost. Grasping is a LEARNED action:
+// a sigmoid gripper head is trained (BCE) to close exactly when the effector is
+// fully over the commanded block — the shared effectorOverBlock predicate
+// (geometry.ts) — and the rollout turns its rising edge into the physical grasp
+// (see Hero.tsx), instead of the old bare proximity snap.
 //
 // The carry phase is policy-driven, so samples are CARRY-CONDITIONED: a
 // carryFrac share render the commanded block IN THE GRIPPER of the sampled
@@ -103,6 +107,52 @@ const CONVERGE_WINDOW = CONFIG.trainer.converge.window;
 const CONVERGE_STREAK = CONFIG.trainer.converge.streak;
 const MIN_BATCHES = CONFIG.trainer.converge.minBatches;
 const MAX_BATCHES = CONFIG.trainer.converge.maxBatches;
+
+// Main-optimizer LR schedule (see config.ts lrSchedule): a linear ramp
+// start→peak over warmupBatches, then inverse-time decay toward floor.
+const LR_START = CONFIG.trainer.lrSchedule.start;
+const LR_PEAK = CONFIG.trainer.lrSchedule.peak;
+const LR_WARMUP_BATCHES = CONFIG.trainer.lrSchedule.warmupBatches;
+const LR_FLOOR = CONFIG.trainer.lrSchedule.floor;
+const LR_DECAY_HALFLIFE = CONFIG.trainer.lrSchedule.decayHalfLife;
+
+/** Main-optimizer Adam LR at this batch index: linear ramp LR_START→LR_PEAK
+    over LR_WARMUP_BATCHES, then inverse-time decay toward LR_FLOOR. The
+    collapse risk a flat high LR carries (config.ts's learningRate history)
+    lives in the fragile OPENING phase — ramping past it (once mirror-balanced
+    batches have de-risked that phase) reaches the faster regime without
+    starting training on the cliff edge. */
+function scheduledLr(batch: number): number {
+  if (batch < LR_WARMUP_BATCHES)
+    return LR_START + (LR_PEAK - LR_START) * (batch / LR_WARMUP_BATCHES);
+  const t = batch - LR_WARMUP_BATCHES;
+  return LR_FLOOR + (LR_PEAK - LR_FLOOR) / (1 + t / LR_DECAY_HALFLIFE);
+}
+
+/** Recover (θ1, θ2) from the model's 4 circular action outputs (see model.ts).
+    atan2 reads only the DIRECTION, so the unconstrained radius is harmless. θ1
+    is un-wrapped into solveIK's [-π/2, 3π/2) band (geometry.ts) so the rollout,
+    which steps proportionally FROM the current pose, moves the short way round
+    (a raw atan2 in (-π, π] could report a near-π target as its negative twin). */
+function anglesFromCircular(
+  cos1: number,
+  sin1: number,
+  cos2: number,
+  sin2: number
+): [number, number] {
+  let t1 = Math.atan2(sin1, cos1);
+  while (t1 < -Math.PI / 2) t1 += 2 * Math.PI;
+  const t2 = Math.atan2(sin2, cos2);
+  return [t1, t2];
+}
+
+/** Signed circular difference (pred − label) wrapped into (-π, π] — so the
+    probe's angle-space Huber is correct across the wrap seam. */
+function angleErr(pred: number, label: number): number {
+  const m = 2 * Math.PI;
+  // JS % can go negative; ((x % m) + m) % m reproduces Python's floor-mod.
+  return (((pred - label + Math.PI) % m) + m) % m - Math.PI;
+}
 
 export type TrainerStatus =
   | "idle"
@@ -320,21 +370,37 @@ export class VLATrainerCore {
 
   /** Backing arrays of a synthesized batch — the tensors trainStep and
       runProbe build from. `force` pins every sample to one phase bucket;
-      the training path leaves it unset and samples both freely. */
+      the training path leaves it unset and samples both freely.
+
+      Every batch is MIRROR-PAIRED: it synthesizes ⌊n/2⌋ scenes and fills each
+      odd slot as its EXACT horizontal mirror (n odd synthesizes one extra
+      unmirrored). The task is exactly left-right symmetric about the arm base
+      (config.arm.base x=0.5 — fk()'s effector mirrors as ex' = 1 − ex, and the
+      silhouette's pixel base sits at the image's horizontal center regardless
+      of pose), so a rendered scene's column-flip is pixel-equivalent to
+      re-rendering the truly mirrored scene — a second training sample for ZERO
+      extra renders. Every label transforms in closed form: (θ1,θ2)→(π−θ1,−θ2)
+      [REST maps to itself], the attention map's columns mirror, and
+      carry/color/gripper/language are invariant. Pairing this way SIDE-BALANCES
+      every batch by construction — directly countering the side-binding
+      collapse — at half the render cost. */
   private synthBatch(n: number, force?: { carry?: boolean }) {
     const px = IMG_SIZE * IMG_SIZE * 3;
     const cells = ATTN_GRID * ATTN_GRID;
+    const G = ATTN_GRID;
     const vis = new Float32Array(n * px);
     const lang = new Int32Array(n * MAX_SEQ_LEN);
     /** Proprioceptive carry flag per sample (1 = block in the gripper). */
     const carryF = new Float32Array(n);
-    const ysA = new Float32Array(n * 2);
+    // action label = circular coords (cosθ1, sinθ1, cosθ2, sinθ2), see model.ts
+    const ysA = new Float32Array(n * 4);
     const ysC = new Float32Array(n * COLORS.length);
     const ysMPick = new Float32Array(n * cells);
     /** Gripper "close now" label per sample (1 = should be closed). */
     const ysG = new Float32Array(n);
 
-    for (let i = 0; i < n; i++) {
+    // Synthesize one FRESH sample into slot `idx` (render + IK + every label).
+    const synthOne = (idx: number) => {
       const layout = randomLayout();
       // an executable command: the acted-on color is present in the scene
       const sentence = sampleCommand(layout);
@@ -349,7 +415,7 @@ export class VLATrainerCore {
       // sits fully over the block, guaranteeing a dense supply of close-now
       // examples for the gripper head (see graspFrac in config.ts).
       const graspNow = !midCarry && Math.random() < GRASP_FRAC;
-      carryF[i] = midCarry ? 1 : 0;
+      carryF[idx] = midCarry ? 1 : 0;
       let t1: number;
       let t2: number;
       if (!midCarry) {
@@ -382,19 +448,20 @@ export class VLATrainerCore {
       // to the rollout grasp gate (Hero.tsx) — that consistency is what stops
       // the "hold closed the whole time and snap on arrival" degenerate. Most
       // far/near poses give 0; grasp-now (and mid-carry) poses give 1.
-      ysG[i] =
+      ysG[idx] =
         midCarry || effectorOverBlock(a1, a2, target, GRIP_RADIUS) ? 1 : 0;
 
-      // ABSOLUTE target joint angles, not a delta from the sampled pose:
-      // the label doesn't depend on the (randomized, for robustness) pose
-      // the arm is rendered at — only on the scene, the command and the
-      // carry state. That removes the need for the network to also read the
-      // current pose out of the image and implicitly subtract; the rollout
-      // computes its own delta from this against its actual known current
-      // pose (see Hero.tsx).
-      ysA[i * 2] = t1;
-      ysA[i * 2 + 1] = t2;
-      ysC[i * COLORS.length + sentence.color] = 1;
+      // ABSOLUTE target joint angles, not a delta from the sampled pose,
+      // projected onto the unit circle (recovered via atan2 at readout — see
+      // model.ts). The label doesn't depend on the (randomized, for robustness)
+      // pose the arm is rendered at — only on the scene, the command and the
+      // carry state; the rollout computes its own delta from the recovered
+      // angles against its actual known current pose (see Hero.tsx).
+      ysA[idx * 4] = Math.cos(t1);
+      ysA[idx * 4 + 1] = Math.sin(t1);
+      ysA[idx * 4 + 2] = Math.cos(t2);
+      ysA[idx * 4 + 3] = Math.sin(t2);
+      ysC[idx * COLORS.length + sentence.color] = 1;
       // attention supervision, one bilinear soft label, phase-INDEPENDENT
       // (see model.ts — the action loss alone cannot sharpen the map): the
       // commanded block wherever it renders (rest spot, or the effector while
@@ -402,7 +469,7 @@ export class VLATrainerCore {
       const [pu, pv] = midCarry
         ? this.effectorUV(a1, a2)
         : this.blockUV(target.x, target.size, target.y ?? 0);
-      this.writeMapLabel(ysMPick, i * cells, pu, pv);
+      this.writeMapLabel(ysMPick, idx * cells, pu, pv);
 
       // INVERTED intensities (background 0, content sparse positive) — fed
       // raw, the near-all-white image saturates the conv branch and the
@@ -413,7 +480,7 @@ export class VLATrainerCore {
         layout,
         midCarry ? sentence.color : null
       ).data;
-      const base = i * px;
+      const base = idx * px;
       for (let p = 0; p < IMG_SIZE * IMG_SIZE; p++) {
         vis[base + p * 3] = 1 - img[p * 4] / 255;
         vis[base + p * 3 + 1] = 1 - img[p * 4 + 1] / 255;
@@ -428,9 +495,50 @@ export class VLATrainerCore {
         let id = sentence.tokens[s];
         if (id !== PAD && !LABEL_TOKEN_IDS.has(id) && Math.random() < WORD_DROPOUT)
           id = UNK;
-        lang[i * MAX_SEQ_LEN + s] = id;
+        lang[idx * MAX_SEQ_LEN + s] = id;
       }
+    };
+
+    // Fill `dst` as the EXACT horizontal mirror of already-filled `src` — no
+    // render, no IK, just the closed-form transform (see the method docstring).
+    const mirrorInto = (src: number, dst: number) => {
+      // vision: flip the [IMG,IMG,3] image left-right (mirror the columns)
+      const sBase = src * px;
+      const dBase = dst * px;
+      for (let y = 0; y < IMG_SIZE; y++)
+        for (let x = 0; x < IMG_SIZE; x++) {
+          const so = sBase + (y * IMG_SIZE + (IMG_SIZE - 1 - x)) * 3;
+          const doff = dBase + (y * IMG_SIZE + x) * 3;
+          vis[doff] = vis[so];
+          vis[doff + 1] = vis[so + 1];
+          vis[doff + 2] = vis[so + 2];
+        }
+      // language / carry / color / gripper are invariant under the mirror
+      for (let s = 0; s < MAX_SEQ_LEN; s++)
+        lang[dst * MAX_SEQ_LEN + s] = lang[src * MAX_SEQ_LEN + s];
+      carryF[dst] = carryF[src];
+      for (let c = 0; c < COLORS.length; c++)
+        ysC[dst * COLORS.length + c] = ysC[src * COLORS.length + c];
+      ysG[dst] = ysG[src];
+      // (θ1,θ2)→(π−θ1,−θ2) in circular coords: cos(π−θ1)=−cosθ1,
+      // sin(π−θ1)=sinθ1, cos(−θ2)=cosθ2, sin(−θ2)=−sinθ2.
+      ysA[dst * 4] = -ysA[src * 4];
+      ysA[dst * 4 + 1] = ysA[src * 4 + 1];
+      ysA[dst * 4 + 2] = ysA[src * 4 + 2];
+      ysA[dst * 4 + 3] = -ysA[src * 4 + 3];
+      // attention map: mirror the G×G columns (row-major i*G + j)
+      for (let i = 0; i < G; i++)
+        for (let j = 0; j < G; j++)
+          ysMPick[dst * cells + i * G + j] =
+            ysMPick[src * cells + i * G + (G - 1 - j)];
+    };
+
+    const half = Math.floor(n / 2);
+    for (let k = 0; k < half; k++) {
+      synthOne(2 * k);
+      mirrorInto(2 * k, 2 * k + 1);
     }
+    if (n % 2) synthOne(n - 1);
 
     return {
       n,
@@ -519,11 +627,18 @@ export class VLATrainerCore {
    */
   private async trainStep(): Promise<number> {
     const tf = this.tf!;
+    // Override Adam's LR from the schedule BEFORE this step (mirrors trainer.py
+    // fit()). this.batches is 0 on the shader-warmup step, 1..N in the loop, so
+    // the b-th gradient step uses scheduledLr(b) exactly as in Python. Adam
+    // reads its learningRate live each applyGradients, so the mutation takes
+    // effect; the field is typed on the concrete optimizer, hence the cast.
+    (this.models!.model.optimizer as unknown as { learningRate: number })
+      .learningRate = scheduledLr(this.batches);
     const b = this.synthBatch(BATCH_SIZE);
     const xsVision = tf.tensor4d(b.vis, [b.n, IMG_SIZE, IMG_SIZE, 3]);
     const xsLang = tf.tensor2d(b.lang, [b.n, MAX_SEQ_LEN], "int32");
     const xsCarry = tf.tensor2d(b.carryF, [b.n, 1]);
-    const yAction = tf.tensor2d(b.ysA, [b.n, 2]);
+    const yAction = tf.tensor2d(b.ysA, [b.n, 4]);
     const yColor = tf.tensor2d(b.ysC, [b.n, COLORS.length]);
     const yMapPick = tf.tensor2d(b.ysMPick, [b.n, b.cells]);
     const yGrip = tf.tensor2d(b.ysG, [b.n, 1]);
@@ -592,9 +707,26 @@ export class VLATrainerCore {
           grip: grip.dataSync() as Float32Array,
         };
       });
+      // bucket metric stays ANGLE-space Huber (comparable across experiments):
+      // recover both pred & label angles from the circular coords, then Huber
+      // the wrapped per-joint error.
       let sum = 0;
-      for (let k = 0; k < b.n * 2; k++)
-        sum += this.huber(r.action[k] - b.ysA[k]);
+      for (let i = 0; i < b.n; i++) {
+        const [pt1, pt2] = anglesFromCircular(
+          r.action[i * 4],
+          r.action[i * 4 + 1],
+          r.action[i * 4 + 2],
+          r.action[i * 4 + 3]
+        );
+        const [lt1, lt2] = anglesFromCircular(
+          b.ysA[i * 4],
+          b.ysA[i * 4 + 1],
+          b.ysA[i * 4 + 2],
+          b.ysA[i * 4 + 3]
+        );
+        sum += this.huber(angleErr(pt1, lt1));
+        sum += this.huber(angleErr(pt2, lt2));
+      }
       buckets[carry ? "carry" : "reach"] = sum / (b.n * 2);
       for (let i = 0; i < b.n; i++) {
         const am = VLATrainerCore.argmaxRow;
@@ -926,8 +1058,17 @@ export class VLATrainerCore {
     }
     // normalize the map so the peak cell is 1 — the UI uses it as alpha
     const inv = peak > 0 ? 1 / peak : 0;
+    // recover the target joint angles from the 4 circular action coords
+    // (cosθ1,sinθ1,cosθ2,sinθ2) with atan2 + the θ1 unwrap — see model.ts. The
+    // rollout consumes plain angles, so PredictResult.target stays [θ1, θ2].
+    const [t1, t2] = anglesFromCircular(
+      out.action[0],
+      out.action[1],
+      out.action[2],
+      out.action[3]
+    );
     return {
-      target: [out.action[0], out.action[1]],
+      target: [t1, t2],
       attn: Array.from(attnSel, (a) => a * inv),
       xy: [ux / G, vy / G],
       grip: out.grip[0],
