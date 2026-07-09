@@ -13,3 +13,4 @@ build/
 checkpoints/
 *.weights.h5
 wandb/
+results/
