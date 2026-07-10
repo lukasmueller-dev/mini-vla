@@ -17,9 +17,12 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  issue_comment:
+    types: [created]
 
 jobs:
   typecheck:
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,6 +35,7 @@ jobs:
       - run: npm run typecheck
 
   test:
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -64,11 +68,30 @@ jobs:
           path: playwright-report/
           retention-days: 14
 
+  claude-review:
+    if: >
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
   # Single stable status for branch protection: green only if every shard and
   # the typecheck passed. `if: always()` so it still runs (and fails) when a
   # shard fails rather than being skipped along with it.
   e2e:
-    if: always()
+    if: always() && github.event_name != 'issue_comment'
     needs: [typecheck, test]
     runs-on: ubuntu-latest
     steps:
