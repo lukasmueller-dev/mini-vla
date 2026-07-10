@@ -25,8 +25,17 @@ likes on top of the data the package exposes.
 npm install
 npm run demo     # Vite page: watch it train + roll out (open → close → lift)
 npm run eval     # headless sweep: train to convergence, print grasp metrics
+npm run test:e2e # pipeline smoke across the browser×device matrix
+npm run perf     # convergence-perf gate: batches-to-converge vs its budget
 npm run typecheck
 ```
+
+`npm run perf` (js/test/perf.spec.ts) trains each profile to full convergence
+and asserts it stays within the batch budget in js/test/perf-budgets.json — a
+regression guard on the number the <30s in-browser budget is built on. It needs
+a **real GPU** (a full run is ~500 software-WebGL batches ≈ 20 min otherwise),
+so it's separate from `test:e2e` and out of CI; edit the JSON to retune a budget
+or add a task.
 
 `npm run eval` needs a Chromium — `npx playwright install chromium` in a fresh
 clone (or set `MINIVLA_CHROMIUM=/path/to/chromium` to reuse an existing binary).
@@ -43,7 +52,7 @@ One forward pass of a language-conditioned **spatial-attention** policy produces
 | **gripper** | a sigmoid `0 (open) → 1 (closed)` | the grasp (its rising edge over a block) |
 | **attention** | a spatial map over the vision grid (+ its soft-argmax) | the "where the model looks" heatmap |
 
-A conv stack turns the 32×32 silhouette into a `G×G` feature map; a single
+A conv stack turns the 48×48 silhouette into a `G×G` feature map; a single
 language query (an attention-pooled, GloVe-embedded sentence) dot-product-scores
 every cell; a spatial softmax makes the attention map; the readout is the map's
 soft-argmax plus its attention-weighted features. A small dense head regresses

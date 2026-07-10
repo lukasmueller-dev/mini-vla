@@ -45,8 +45,8 @@ It bounds `imgSize`, the conv stack, `batchSize`, warm-up, and above all
   regression to fix, not a warning to ignore.
 - **Pay-as-you-go:** if you make the net heavier (bigger `imgSize`, deeper conv,
   larger `batchSize`), you must *buy it back* — faster/fewer batches to converge —
-  or you break the budget. Note the default `converge.maxBatches` fallback (450 ≈
-  45 s) already exceeds budget; healthy runs converge well before it, so don't let
+  or you break the budget. Note the default `converge.maxBatches` fallback (800 ≈
+  80 s) already exceeds budget; healthy runs converge well before it, so don't let
   the *typical* path drift toward the fallback.
 
 ## After Python architecture work

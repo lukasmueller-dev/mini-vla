@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--set", nargs="*", default=[], metavar="path:value",
                    help="CONFIG knob overrides, e.g. model.mapLossWeight:2.5")
     p.add_argument("--max-batches", type=int, default=None,
-                   help="override converge.maxBatches (raise past 450 to see true convergence)")
+                   help="override converge.maxBatches (raise past 800 to see true convergence)")
     p.add_argument("--probe", type=int, default=25, help="probe cadence in batches (0=off)")
     p.add_argument("--eval-episodes", type=int, default=32)
     p.add_argument("--out", default=None, help="result JSON path (default: stdout)")
