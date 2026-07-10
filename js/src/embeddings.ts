@@ -30,10 +30,43 @@ export function vocabWords(): string[] | null {
   return words;
 }
 
+/**
+ * Fail loudly when the fetched assets don't describe the same table the
+ * compiled-in constants (vocab.gen.ts) claim.
+ *
+ * A host can serve a DIFFERENT generation of the assets than the JS consuming
+ * them — a stale CDN copy, an unversioned asset path outliving a redeploy — and
+ * the dequantize loop below would not notice: reads past the end of `bin` yield
+ * `undefined → NaN`, and writes past the end of `m` are silently DISCARDED
+ * (TypedArray out-of-bounds writes don't throw). The result is a frozen
+ * text_embedding layer full of garbage, a model that quietly fails to learn,
+ * and no error anywhere. Three comparisons buy that whole class of bug.
+ */
+function assertAssetShape(bin: Int8Array, list: string[], assetBase: string) {
+  const regen = "regenerate with `npm run gen:embeddings`, or point assetBase at the matching version";
+  if (EMBED_SCALES.length !== EMBED_DIM)
+    throw new Error(
+      `mini-vla: corrupt vocab.gen.ts — EMBED_SCALES has ${EMBED_SCALES.length} ` +
+        `entries, expected EMBED_DIM=${EMBED_DIM}`
+    );
+  if (list.length !== VOCAB_SIZE - 2)
+    throw new Error(
+      `mini-vla: ${assetBase}/vocab.txt has ${list.length} words, expected ` +
+        `${VOCAB_SIZE - 2} (VOCAB_SIZE=${VOCAB_SIZE} less <pad> and <unk>) — ${regen}`
+    );
+  if (bin.length !== list.length * EMBED_DIM)
+    throw new Error(
+      `mini-vla: ${assetBase}/embeddings-50d.bin is ${bin.length} bytes, expected ` +
+        `${list.length * EMBED_DIM} (${list.length} words × EMBED_DIM=${EMBED_DIM}) — ${regen}`
+    );
+}
+
 /** Fetch + dequantize (idempotent; concurrent callers share one promise).
     `assetBase` locates the generated `embeddings-50d.bin` + `vocab.txt` — the
-    portfolio serves them from `/vla` (its default); another host (mini-vla's
-    demo/eval) points it at wherever it serves the package's assets/. */
+    package's own demo/eval/test pages serve assets/ at the default `/vla`, so
+    they need zero wiring; a host that version-stamps its asset directory passes
+    its own base (see VLATrainer's constructor). Rejects — loudly — if what it
+    fetched doesn't match this build's constants. */
 export function loadEmbeddings({
   assetBase = "/vla",
 }: { assetBase?: string } = {}): Promise<Float32Array> {
@@ -47,6 +80,8 @@ export function loadEmbeddings({
       throw new Error("embedding assets failed to load");
     const bin = new Int8Array(await binRes.arrayBuffer());
     const list = (await wordsRes.text()).split("\n").filter(Boolean);
+
+    assertAssetShape(bin, list, assetBase);
 
     // rows 0 (<pad>) and 1 (<unk>) stay zero: dropped-out or unknown words
     // contribute nothing to the mean-pooled sentence vector

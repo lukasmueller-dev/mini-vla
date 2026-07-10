@@ -18,6 +18,28 @@ browser demo retrains from scratch (that's its whole point), so `js/` mirrors th
 network shape, the task, the config, and the silhouette render — never a trained
 checkpoint.
 
+### Serving the assets (`assetBase`)
+
+The browser side `fetch()`es `embeddings-50d.bin` + `vocab.txt` at runtime from
+`assetBase`, which defaults to `/vla` — where this repo's own demo, eval and test
+pages serve `assets/`, so they need no wiring at all. A host that redeploys often
+should serve them from a **version-stamped** directory and say so:
+
+```ts
+import { version } from "mini-vla/package.json";
+new VLATrainer({ assetBase: `/vla/${version}` });
+```
+
+Copy `assets/` into that same `public/vla/<version>/`, deriving both strings from
+that one `version` field. A tab left open across a deploy then gets a clean 404 —
+surfacing as `status: "error"` with `errorReason: "assets"` — instead of quietly
+loading embeddings from a different generation than its JS. `loadEmbeddings()`
+also validates the fetched bytes against the constants compiled in from
+`vocab.gen.ts`, throwing with expected vs. actual sizes, so a mismatch can never
+reach the model as a silently NaN-poisoned table.
+
+(`grammar.json` is a bundle-time import, not a fetch; `assetBase` doesn't apply.)
+
 ## Architecture
 
 The policy is a **language-conditioned spatial-attention** network, not a

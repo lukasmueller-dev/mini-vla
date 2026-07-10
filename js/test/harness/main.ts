@@ -15,8 +15,12 @@
 //                            fallback (the no-worker legacy path)
 //   ?autostart=0             don't start training on load (controls spec
 //                            drives start/pause/resume/reset itself)
+//   ?assetBase=/custom/base  serve the embeddings from a non-default URL
+//                            (omitted → loadEmbeddings' "/vla" default, which
+//                            is what the demo/eval pages and the host rely on)
 
 import { VLATrainer } from "../../src/trainer";
+import { embeddingMatrix, loadEmbeddings } from "../../src/embeddings";
 import { RolloutEngine } from "../../src/rollout";
 import { paintScene, paintSilhouette, DEFAULT_PALETTE } from "../../src/scene";
 import {
@@ -61,7 +65,9 @@ const presetName =
 const cfg: RunConfig = PRESETS[presetName] ?? DEFAULT_RUN_CONFIG;
 
 const maxBatches = Number(q.get("max")) || 0;
-const trainer = new VLATrainer();
+// omitted ⇒ pass nothing, exercising the zero-wiring "/vla" default path
+const assetBase = q.get("assetBase") ?? undefined;
+const trainer = new VLATrainer({ assetBase });
 const engine = new RolloutEngine();
 
 const hud = document.getElementById("hud")!;
@@ -82,6 +88,7 @@ const onUpdate = () => {
 function state() {
   return {
     status: trainer.status,
+    errorReason: trainer.errorReason,
     batches: trainer.batches,
     loss: trainer.loss,
     smoothLoss: trainer.smoothLoss,
@@ -207,6 +214,33 @@ function paintCheck() {
   };
 }
 
+/** Call loadEmbeddings directly (this thread's module instance — untouched by
+    the worker's) and report how it went, plus whether a table actually landed.
+    Used with ?autostart=0 so nothing else has loaded the embeddings first:
+    lets a spec assert the shape check rejects, that no NaN table is published,
+    and that a retry after the rejection refetches instead of returning the
+    cached failure. */
+async function probeEmbeddings(base?: string) {
+  try {
+    const m = await loadEmbeddings({ assetBase: base });
+    return {
+      ok: true as const,
+      message: "",
+      rows: m.length,
+      anyNaN: m.some(Number.isNaN),
+      published: embeddingMatrix() !== null,
+    };
+  } catch (err) {
+    return {
+      ok: false as const,
+      message: err instanceof Error ? err.message : String(err),
+      rows: 0,
+      anyNaN: false,
+      published: embeddingMatrix() !== null,
+    };
+  }
+}
+
 /** The active palette (name + first synonym per color) — the spec derives
     expected decode indices from this instead of hard-coding color order. */
 function palette() {
@@ -221,12 +255,14 @@ declare global {
     __smoke?: {
       preset: string;
       mode: "worker" | "inline";
+      assetBase: string | undefined;
       state: typeof state;
       decode: typeof decode;
       predict: typeof predict;
       rollout: typeof rollout;
       paintCheck: typeof paintCheck;
       palette: typeof palette;
+      probeEmbeddings: typeof probeEmbeddings;
       start: () => void;
       pause: () => void;
       resume: () => void;
@@ -239,12 +275,14 @@ declare global {
 window.__smoke = {
   preset: presetName,
   mode: forceInline ? "inline" : "worker",
+  assetBase,
   state,
   decode,
   predict,
   rollout,
   paintCheck,
   palette,
+  probeEmbeddings,
   start: () => trainer.start(onUpdate, cfg),
   pause: () => trainer.pause(),
   resume: () => trainer.resume(),

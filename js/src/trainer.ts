@@ -8,8 +8,8 @@
 //    the proxy applies the same optimistic state transition the old in-thread
 //    class did synchronously, posts the command, and re-syncs from the
 //    worker's authoritative {t:"state"} echo.
-//  - telemetry (status/loss/lossHistory/batches/ready/lossNorm) stays a
-//    plain synchronous read, served from a mirror updated per batch message.
+//  - telemetry (status/errorReason/loss/lossHistory/batches/ready/lossNorm)
+//    stays a plain synchronous read, served from a mirror updated per batch.
 //    lossHistory is reconstructed by appending each batch's loss — only a
 //    few numbers cross the thread boundary per step, never the full curve.
 //  - inference (predictFrozenTarget/decodeCommand/attentionWeights) is now
@@ -36,11 +36,22 @@ import {
   VLATrainerCore,
   type DecodedCommand,
   type PredictResult,
+  type TrainerError,
   type TrainerStatus,
 } from "./trainer.core";
 import type { WorkerRequest, WorkerResponse } from "./trainer.worker";
 
-export type { DecodedCommand, PredictResult, TrainerStatus };
+export type { DecodedCommand, PredictResult, TrainerError, TrainerStatus };
+
+/** Host wiring for the trainer. */
+export interface VLATrainerOptions {
+  /** Directory the host serves the package's `assets/` from — the embedding
+      `.bin` + `vocab.txt` are fetched from here. Defaults to `/vla`, which is
+      what the package's own demo/eval/test pages serve. A host that redeploys
+      often should version-stamp it (`/vla/0.4.0`) so a stale tab 404s instead
+      of loading assets from a different generation than its JS. */
+  assetBase?: string;
+}
 
 const BATCH_SIZE = CONFIG.trainer.batchSize;
 
@@ -62,6 +73,7 @@ export class VLATrainer {
   private core: VLATrainerCore | null = null;
   private worker: Worker | null = null;
   private onUpdate: (() => void) | undefined;
+  private assetBase: string | undefined;
   /** Reset generation — state posts from an older gen are stale, drop them. */
   private gen = 0;
   private nextId = 1;
@@ -71,6 +83,7 @@ export class VLATrainer {
   // mode every accessor delegates to the core directly).
   private m = {
     status: "idle" as TrainerStatus,
+    errorReason: null as TrainerError | null,
     loss: NaN,
     smoothLoss: NaN,
     initialLoss: NaN,
@@ -78,8 +91,17 @@ export class VLATrainer {
     batches: 0,
   };
 
+  constructor(options: VLATrainerOptions = {}) {
+    this.assetBase = options.assetBase;
+  }
+
   get status() {
     return this.core ? this.core.status : this.m.status;
+  }
+  /** Why status is "error" (null otherwise) — decides whether the host offers
+      a retry or a reload. See TrainerError. */
+  get errorReason() {
+    return this.core ? this.core.errorReason : this.m.errorReason;
   }
   /** Real action loss (Huber) from the latest batch (NaN before the first). */
   get loss() {
@@ -135,8 +157,9 @@ export class VLATrainer {
     // If the worker script fails to load/evaluate (stale chunk, unsupported
     // browser, etc.) or posts something structured-clone can't handle, there
     // is otherwise no signal at all — status would sit at "loading" forever.
-    // Recover the same way a failed embeddings fetch does: back to idle so
-    // "Start Training" reappears and a retry gets a fresh worker.
+    // Surface it as status "error" / reason "worker": unlike an "assets"
+    // failure, retrying in-page is futile here, because a fresh Worker would
+    // resolve the same dead URL. Only a page reload can recover.
     this.worker.onerror = (ev) => {
       console.error("VLA trainer worker failed:", ev.message || ev);
       this.handleWorkerFailure();
@@ -152,6 +175,7 @@ export class VLATrainer {
           if (msg.gen !== this.gen) return; // pre-reset message in flight
           if (msg.batches > this.m.batches) this.m.lossHistory.push(msg.loss);
           this.m.status = msg.status;
+          this.m.errorReason = msg.errorReason;
           this.m.loss = msg.loss;
           this.m.smoothLoss = msg.smoothLoss;
           this.m.initialLoss = msg.initialLoss;
@@ -186,15 +210,17 @@ export class VLATrainer {
   }
 
   /** Worker died (load error or unclonable message) — drop it, resolve any
-      in-flight requests with null so callers don't hang, and go back to idle
-      so the UI recovers instead of sitting on "loading" forever. */
+      in-flight requests with null so callers don't hang, and land on "error"
+      so the UI shows a reload affordance instead of sitting on "loading"
+      forever. */
   private handleWorkerFailure() {
     this.worker?.terminate();
     this.worker = null;
     this.gen++; // orphan any reply that somehow still lands
     this.pending.forEach((resolve) => resolve(null as never));
     this.pending.clear();
-    this.m.status = "idle";
+    this.m.status = "error";
+    this.m.errorReason = "worker";
     this.m.loss = NaN;
     this.m.smoothLoss = NaN;
     this.m.initialLoss = NaN;
@@ -231,12 +257,17 @@ export class VLATrainer {
     this.onUpdate = onUpdate;
     setRunConfig(cfg);
     if (this.core) {
-      void this.core.start(onUpdate);
+      void this.core.start(onUpdate, this.assetBase);
       return;
     }
-    if (this.m.status !== "idle") return;
+    // "error" restarts too: an "assets" failure un-cached its promise, so a
+    // retry refetches. (A "worker" failure already dropped the worker, so
+    // ensureBackend just made a fresh one — futile against a dead chunk URL,
+    // but harmless, and the host is told to reload rather than retry.)
+    if (this.m.status !== "idle" && this.m.status !== "error") return;
     this.m.status = "loading";
-    this.send({ t: "start", gen: this.gen, cfg });
+    this.m.errorReason = null;
+    this.send({ t: "start", gen: this.gen, cfg, assetBase: this.assetBase });
     onUpdate?.();
   }
 
@@ -262,6 +293,7 @@ export class VLATrainer {
     if (this.core) return this.core.reset();
     this.gen++;
     this.m.status = "idle";
+    this.m.errorReason = null;
     this.m.loss = NaN;
     this.m.smoothLoss = NaN;
     this.m.initialLoss = NaN;

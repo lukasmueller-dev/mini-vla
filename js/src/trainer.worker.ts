@@ -7,9 +7,10 @@
 // Protocol (all messages are plain structured-clone-able objects):
 //
 //   main → worker                        worker → main
-//   {t:"start", gen, cfg}                {t:"state", gen, status, loss,
-//   {t:"pause"|"resume"|"reset", gen}      smoothLoss, initialLoss, batches}
-//   {t:"snapshot", gen}                    — after every batch + control msg
+//   {t:"start", gen, cfg, assetBase?}    {t:"state", gen, status, errorReason,
+//   {t:"pause"|"resume"|"reset", gen}      loss, smoothLoss, initialLoss,
+//   {t:"snapshot", gen}                    batches}
+//                                          — after every batch + control msg
 //   {t:"predict", id, a1, a2,            {t:"predict", id, result}
 //     tokens, layout, carry, gen}        {t:"predictLive", id, result}
 //   {t:"predictLive", id, a1, a2,        {t:"decode", id, result}
@@ -19,7 +20,9 @@
 //
 // "start" ships the user's ⚙ RunConfig (task set / palette / density): the
 // worker holds its own copy of the run-config module's state, so it must be
-// installed here before the training loop samples anything. "predict" runs
+// installed here before the training loop samples anything. It also ships the
+// host's optional `assetBase` for the same reason — this thread's embeddings
+// module resolves its own fetch URLs. "predict" runs
 // the FROZEN per-cycle snapshot (the rollout's policy); "predictLive" runs
 // the still-training model (the Vision Encoder panel's live gaze heatmap).
 // Both carry the rollout's carried-block state (rendered at the effector in
@@ -44,13 +47,14 @@ import {
   VLATrainerCore,
   type DecodedCommand,
   type PredictResult,
+  type TrainerError,
 } from "./trainer.core";
 import { loadEmbeddings, vocabWords } from "./embeddings";
 import type { Layout } from "./examples";
 import { setRunConfig, type RunConfig } from "./run-config";
 
 export type WorkerRequest =
-  | { t: "start"; gen: number; cfg: RunConfig }
+  | { t: "start"; gen: number; cfg: RunConfig; assetBase?: string }
   | { t: "pause"; gen: number }
   | { t: "resume"; gen: number }
   | { t: "reset"; gen: number }
@@ -83,6 +87,7 @@ export type WorkerResponse =
       t: "state";
       gen: number;
       status: VLATrainerCore["status"];
+      errorReason: TrainerError | null;
       loss: number;
       smoothLoss: number;
       initialLoss: number;
@@ -100,12 +105,17 @@ const post = (m: WorkerResponse) => postMessage(m);
 /** The latest generation seen from the proxy, echoed on state posts. */
 let gen = 0;
 let vocabSent = false;
+/** Where the host serves the embedding assets; undefined = loadEmbeddings'
+    own `/vla` default. Arrives with "start", so it must be stashed before
+    anything here calls loadEmbeddings (directly or via core.start). */
+let assetBase: string | undefined;
 
 const postState = () =>
   post({
     t: "state",
     gen,
     status: core.status,
+    errorReason: core.errorReason,
     loss: core.loss,
     smoothLoss: core.smoothLoss,
     initialLoss: core.initialLoss,
@@ -117,14 +127,16 @@ onmessage = (e: MessageEvent<WorkerRequest>) => {
   gen = msg.gen;
   switch (msg.t) {
     case "start":
-      // install the run config BEFORE the loop samples anything — this
-      // worker's run-config module state is separate from the main thread's
+      // install the run config and the asset base BEFORE the loop samples or
+      // fetches anything — this worker's copy of both modules' state is
+      // separate from the main thread's
       setRunConfig(msg.cfg);
+      assetBase = msg.assetBase;
       // core.start resolves only when training ends; postState is its
       // per-batch onUpdate. The vocab rides along once the embeddings land.
-      void core.start(postState);
+      void core.start(postState, assetBase);
       if (!vocabSent)
-        void loadEmbeddings()
+        void loadEmbeddings({ assetBase })
           .then(() => {
             const words = vocabWords();
             if (words) {

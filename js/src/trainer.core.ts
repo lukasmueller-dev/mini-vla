@@ -192,7 +192,24 @@ export type TrainerStatus =
   | "loading"
   | "training"
   | "paused"
-  | "converged";
+  | "converged"
+  | "error";
+
+/**
+ * Why the trainer is in "error". Hosts key their recovery affordance off this,
+ * and the difference matters:
+ *
+ *  - "assets" — the embedding fetch failed or the fetched assets didn't match
+ *    this build. A RETRY CAN SUCCEED: loadEmbeddings un-caches a rejected
+ *    promise, so calling start() again refetches. Offer "Try again".
+ *  - "worker" — the worker script failed to load or evaluate (typically a
+ *    content-hashed chunk that a redeploy deleted out from under an open tab).
+ *    RETRYING IN-PAGE IS FUTILE: a fresh `new Worker(...)` resolves the same
+ *    dead URL. Only a page reload can help. Offer "Reload".
+ *  - "train" — a gradient step threw and even the cpu-backend fallback failed.
+ *    Rare; treat like "assets" (a retry rebuilds the model from scratch).
+ */
+export type TrainerError = "assets" | "worker" | "train";
 
 /** One policy inference: the action plus the "where the model looks" viz,
     all read from a single forward pass of the viz twin (see model.ts). */
@@ -261,6 +278,8 @@ function make2d(size: number): { canvas: CanvasImageSource; ctx: Ctx2D } {
 
 export class VLATrainerCore {
   status: TrainerStatus = "idle";
+  /** Set whenever status is "error"; null otherwise. See TrainerError. */
+  errorReason: TrainerError | null = null;
   /** Real action loss (Huber) from the latest trainOnBatch (NaN before the first). */
   loss = NaN;
   /** Mean action loss over the last CONVERGE_WINDOW batches — the low-lag
@@ -782,20 +801,25 @@ export class VLATrainerCore {
   /**
    * Load tfjs (first call only), build a fresh model and run batches until
    * pause/reset or convergence. onUpdate fires after every batch.
+   *
+   * `assetBase` locates the embedding assets (default `/vla`); it is passed
+   * per-call rather than held on the instance because trainer.worker.ts builds
+   * its core at module scope, before the host's base arrives with "start".
    */
-  async start(onUpdate?: () => void): Promise<void> {
+  async start(onUpdate?: () => void, assetBase?: string): Promise<void> {
     if (this.running) return;
     const myRun = ++this.runId;
     this.running = true;
     this.paused = false;
     this.status = "loading";
+    this.errorReason = null;
     onUpdate?.();
 
     // the pretrained GloVe assets (~1MB) load in parallel with tfjs; both
     // are cached after the first start, so a reset+restart resolves instantly
     let embed: Float32Array;
     try {
-      const embedP = loadEmbeddings();
+      const embedP = loadEmbeddings({ assetBase });
       if (!this.tf) {
         // Import the umbrella "@tensorflow/tfjs" package. A prior attempt to
         // import core+layers+webgl-backend separately (to shed the unused
@@ -815,12 +839,14 @@ export class VLATrainerCore {
       }
       embed = await embedP;
     } catch (err) {
-      // network failure on the embedding fetch — back to idle so the button
-      // becomes "Start Training" again (loadEmbeddings un-caches the
-      // rejection, so the retry refetches)
+      // The embedding fetch failed, or the fetched assets didn't match this
+      // build (see assertAssetShape). Surface it as a real error status the
+      // host can render — a retry is worth offering, because loadEmbeddings
+      // un-caches the rejection and start() refetches.
       console.error("VLA trainer failed to load", err);
       this.running = false;
-      this.status = "idle";
+      this.status = "error";
+      this.errorReason = "assets";
       onUpdate?.();
       return;
     }
@@ -918,10 +944,11 @@ export class VLATrainerCore {
         console.warn("VLA trainer falling back to the cpu backend");
         this.running = false;
         await this.tf.setBackend("cpu");
-        return this.start(onUpdate);
+        return this.start(onUpdate, assetBase);
       }
       this.running = false;
-      this.status = "idle";
+      this.status = "error";
+      this.errorReason = "train";
       this.disposeModels();
       onUpdate?.();
     }
@@ -946,6 +973,7 @@ export class VLATrainerCore {
     this.paused = false;
     this.runId++;
     this.status = "idle";
+    this.errorReason = null;
     this.disposeModels();
     this.loss = NaN;
     this.smoothLoss = NaN;
