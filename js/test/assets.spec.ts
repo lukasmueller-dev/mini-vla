@@ -9,6 +9,7 @@
 //   /vla-short    embeddings-50d.bin one row short — a host serving a
 //                 different generation of the assets than the JS reading them
 import { test, expect, type Page } from "@playwright/test";
+import { TRAIN_MS, WEDGE_MS } from "./budget";
 
 const HARNESS = "http://localhost:5199/";
 const CUSTOM = "/custom/base";
@@ -38,7 +39,7 @@ test("assetBase is honored on the worker path", async ({ page }) => {
   // it trains, so the table it fetched from the custom base is real
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBeGreaterThan(1);
 
@@ -57,7 +58,7 @@ test("assetBase reaches the core on the inline fallback path", async ({
 
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBeGreaterThan(1);
 
@@ -72,7 +73,7 @@ test("omitting assetBase still resolves the /vla default", async ({ page }) => {
 
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBeGreaterThan(1);
 
@@ -118,7 +119,7 @@ test("a failed asset load surfaces as status error / reason assets", async ({
 
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().status), {
-      timeout: 60_000,
+      timeout: WEDGE_MS,
     })
     .toBe("error");
   const st = await page.evaluate(() => window.__smoke!.state());

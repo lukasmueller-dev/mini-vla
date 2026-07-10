@@ -24,11 +24,14 @@ export default defineConfig({
   testDir: "./js/test",
   testMatch: "**/*.spec.ts",
   // software-GL training runs are slow; individual asserts poll well under this
-  timeout: 240_000,
+  // (js/test/budget.ts holds the per-assert budgets, and scales them on CI)
+  timeout: process.env.CI ? 600_000 : 240_000,
   expect: { timeout: 60_000 },
-  // each worker spawns a browser holding a full WebGL training loop — keep
-  // parallelism low so runs don't starve each other
-  workers: process.env.CI ? 2 : 3,
+  // Each worker spawns a browser holding a full WebGL training loop. On CI the
+  // workflow shards by PROJECT across runners, so a job has one project to run
+  // and one core-starved software-GL loop is plenty — two of them on a 4-vCPU
+  // runner is what made every non-chromium project time out.
+  workers: process.env.CI ? 1 : 3,
   retries: process.env.CI ? 1 : 0,
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI

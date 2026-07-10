@@ -1,6 +1,15 @@
 # Browser × device E2E matrix for the js/ artifact (see playwright.config.ts).
 # Runs on every PR/push; a release tag must be minted through `npm run release`,
 # which runs this same suite locally first (git can't block a tag server-side).
+#
+# Sharded ONE PLAYWRIGHT PROJECT PER RUNNER. Each job trains a full software-GL
+# WebGL loop (CI runners have no GPU), so two projects sharing a 4-vCPU runner
+# starve each other — that is what timed out firefox-desktop, webkit-iphone and
+# chromium-android before. One project per box, `workers: 1`, and the wall clock
+# drops to the slowest single project instead of the sum.
+#
+# Each shard installs only the browser it runs; `e2e` is the single required
+# check, so branch protection needn't know the shard names.
 name: e2e
 
 on:
@@ -10,9 +19,9 @@ on:
   pull_request:
 
 jobs:
-  e2e:
+  typecheck:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,12 +29,52 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run typecheck
-      - run: npx playwright test
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false # one engine's failure shouldn't hide the others
+      matrix:
+        include:
+          - project: chromium-desktop
+            browser: chromium
+          - project: firefox-desktop
+            browser: firefox
+          - project: webkit-desktop
+            browser: webkit
+          - project: webkit-iphone
+            browser: webkit
+          - project: chromium-android
+            browser: chromium
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: npx playwright test --project=${{ matrix.project }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.project }}
           path: playwright-report/
           retention-days: 14
+
+  # Single stable status for branch protection: green only if every shard and
+  # the typecheck passed. `if: always()` so it still runs (and fails) when a
+  # shard fails rather than being skipped along with it.
+  e2e:
+    if: always()
+    needs: [typecheck, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all shards passed
+        run: |
+          echo "typecheck: ${{ needs.typecheck.result }}"
+          echo "test:      ${{ needs.test.result }}"
+          [ "${{ needs.typecheck.result }}" = "success" ] \
+            && [ "${{ needs.test.result }}" = "success" ]

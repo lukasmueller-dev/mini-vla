@@ -3,6 +3,7 @@
 // proxy API. One engine suffices — the fallback selection logic is
 // environment-driven, not engine-specific.
 import { test, expect } from "@playwright/test";
+import { TRAIN_MS } from "./budget";
 
 const HARNESS = "http://localhost:5199/";
 
@@ -19,7 +20,7 @@ test("trains inline when OffscreenCanvas is unavailable", async ({ page }) => {
 
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().status), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBe("paused");
   const st = await page.evaluate(() => window.__smoke!.state());

@@ -7,8 +7,10 @@
 // production.
 //
 // Query params:
-//   ?preset=desktop|mobile   force a run-config profile; DEFAULT mirrors the
-//                            host's device-class rule (≥1100px → desktop)
+//   ?preset=desktop|mobile   which run-config profile to install (default: the
+//                            package's own DEFAULT_RUN_CONFIG). The CALLER picks
+//                            it — mapping a viewport to a profile is a host
+//                            decision, so no breakpoint lives in this package.
 //   ?max=N                   auto-pause after N batches (0 = train freely)
 //   ?forceInline=1           blank out OffscreenCanvas BEFORE the trainer
 //                            boots, forcing the proxy's inline main-thread
@@ -56,12 +58,10 @@ window.addEventListener("unhandledrejection", (e) =>
 const forceInline = q.get("forceInline") === "1";
 if (forceInline) (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas = undefined;
 
-// The host's device-class rule (portfolio serves DESKTOP on ≥1100px
-// viewports, MOBILE on phone-class) — replicated here so the browser×device
-// matrix exercises the profile each device class actually gets.
-const presetName =
-  q.get("preset") ??
-  (matchMedia("(min-width: 1100px)").matches ? "desktop" : "mobile");
+// The package installs whatever RunConfig it is handed; which one a given
+// viewport deserves is the host's call, not ours. Specs name the preset they
+// want so the matrix still trains both profiles.
+const presetName = q.get("preset") ?? "desktop";
 const cfg: RunConfig = PRESETS[presetName] ?? DEFAULT_RUN_CONFIG;
 
 const maxBatches = Number(q.get("max")) || 0;

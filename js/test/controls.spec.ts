@@ -4,6 +4,7 @@
 // representative — the protocol is engine-independent; the smoke matrix
 // already covers per-engine training.
 import { test, expect } from "@playwright/test";
+import { TRAIN_MS, WEDGE_MS } from "./budget";
 
 const HARNESS = "http://localhost:5199/";
 const REPRESENTATIVES = ["chromium-desktop", "webkit-iphone"];
@@ -20,7 +21,7 @@ test("pause / resume / reset / restart via the worker", async ({ page }) => {
 
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBeGreaterThanOrEqual(5);
 
@@ -50,7 +51,7 @@ test("pause / resume / reset / restart via the worker", async ({ page }) => {
   await page.evaluate(() => window.__smoke!.resume());
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 60_000,
+      timeout: WEDGE_MS,
     })
     .toBeGreaterThan(frozen + 2);
 
@@ -69,7 +70,7 @@ test("pause / resume / reset / restart via the worker", async ({ page }) => {
   await page.evaluate(() => window.__smoke!.start());
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBeGreaterThanOrEqual(2);
 });

@@ -3,6 +3,7 @@
 // zero-host-wiring demo never regresses; the deep assertions live in
 // smoke.spec.ts against the instrumented harness.
 import { test, expect } from "@playwright/test";
+import { TRAIN_MS } from "./budget";
 
 const DEMO = "http://localhost:5198/";
 
@@ -15,14 +16,14 @@ test("demo page boots, trains and pauses", async ({ page }) => {
 
   await page.locator("#primary").click();
   await expect(page.locator("#status")).toHaveText("training", {
-    timeout: 120_000,
+    timeout: TRAIN_MS,
   });
 
   // batches climb and the loss readout goes live
   await expect
     .poll(
       async () => Number(await page.locator("#batches").textContent()),
-      { timeout: 120_000 }
+      { timeout: TRAIN_MS }
     )
     .toBeGreaterThan(3);
   await expect(page.locator("#loss")).not.toHaveText("—");
