@@ -5,6 +5,7 @@
 // model quality: loss thresholds are deliberately loose and there is no
 // grasp-rate floor.
 import { test, expect, type Page } from "@playwright/test";
+import { TRAIN_MS, WEDGE_MS } from "./budget";
 
 const HARNESS = "http://localhost:5199/";
 const MAX_BATCHES = 30;
@@ -33,30 +34,39 @@ function collectErrors(page: Page): string[] {
 test("trains, decodes, predicts, rolls out and renders", async ({
   page,
 }, testInfo) => {
+  // Which profile each project trains is a COVERAGE choice of this suite —
+  // phone-class projects exercise the mobile profile, desktops the desktop one
+  // — NOT a claim about how any host maps viewports to presets. The package
+  // installs the RunConfig it is handed and has no breakpoint of its own.
   const mobile = /iphone|android/.test(testInfo.project.name);
-  const errors = collectErrors(page);
-  await page.goto(`${HARNESS}?max=${MAX_BATCHES}`);
+  const preset = mobile ? "mobile" : "desktop";
+  // …so these are the package's own PRESETS (run-config.ts), keyed on what we
+  // just asked for. They catch an edit to the preset table, not a host change.
+  const expected = mobile
+    ? { numColors: 4, maxBlocks: 3 }
+    : { numColors: 8, maxBlocks: 4 };
 
-  // the host's device-class rule picked the right profile for this viewport
-  expect(await page.evaluate(() => window.__smoke!.preset)).toBe(
-    mobile ? "mobile" : "desktop"
-  );
+  const errors = collectErrors(page);
+  await page.goto(`${HARNESS}?max=${MAX_BATCHES}&preset=${preset}`);
+
   expect(await page.evaluate(() => window.__smoke!.mode)).toBe("worker");
-  expect(await page.evaluate(() => window.__smoke!.state().numColors)).toBe(
-    mobile ? 4 : 8
-  );
+  // the requested preset really got installed — on the WORKER's own run-config
+  // module instance, which is what the training loop samples from
+  const cfg = await page.evaluate(() => window.__smoke!.state());
+  expect(cfg.numColors).toBe(expected.numColors);
+  expect(cfg.maxBlocks).toBe(expected.maxBlocks);
 
   // WebKit-wedge regression (commit e0ed849): the historical failure mode is
   // status "training" with batches frozen at 1 forever — so specifically
   // require batches to pass 1, then reach the cap.
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().batches), {
-      timeout: 120_000,
+      timeout: WEDGE_MS,
     })
     .toBeGreaterThan(1);
   await expect
     .poll(() => page.evaluate(() => window.__smoke!.state().status), {
-      timeout: 120_000,
+      timeout: TRAIN_MS,
     })
     .toBe("paused");
 
@@ -74,7 +84,7 @@ test("trains, decodes, predicts, rolls out and renders", async ({
   // color head before batch 0, so the LAST active palette color (trained on
   // both presets) must decode to its own index with real confidence
   const pal = await page.evaluate(() => window.__smoke!.palette());
-  expect(pal).toHaveLength(mobile ? 4 : 8);
+  expect(pal).toHaveLength(expected.numColors);
   const last = pal.length - 1;
   const decoded = await page.evaluate(
     ([syn]) => window.__smoke!.decode(`lift the ${syn} block`),
