@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
                    help="CONFIG knob overrides forwarded to every run")
     p.add_argument("--max-batches", type=int, default=800,
                    help="per-run converge.maxBatches override (high default so the "
-                        "sweep sees TRUE convergence, not the 450 fallback)")
+                        "sweep sees TRUE convergence, not the 800 fallback)")
     p.add_argument("--probe", type=int, default=25)
     p.add_argument("--eval-episodes", type=int, default=32)
     p.add_argument("--name", required=True,

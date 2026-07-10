@@ -2,7 +2,7 @@
 //  - paintScene: the design-styled display renderer (Demonstration + Rollout
 //    boxes) — floor line, pedestal, grey links, colored blocks, trail.
 //  - paintSilhouette: the flattened high-contrast version (white bg, grey
-//    arm, blocks in their own colors) that gets downsampled to 32x32 and fed
+//    arm, blocks in their own colors) that gets downsampled to 48×48 and fed
 //    to the model. Training samples and live rollout inference BOTH go
 //    through this exact renderer, so the policy never sees a distribution it
 //    wasn't trained on.
@@ -214,7 +214,7 @@ const SIL_BLOCK_SCALE = CONFIG.render.silBlockScale;
 /**
  * The model's-eye view: white background, the layout's colored blocks at
  * their positions, grey arm. Two grey link tones + a dark effector dot keep
- * the pose readable after the 32x32 downsample — the network has to regress
+ * the pose readable after the 48×48 downsample — the network has to regress
  * joint angles AND localize the named color from this image alone.
  */
 export function paintSilhouette(
@@ -288,7 +288,7 @@ export function paintSilhouette(
   ctx.stroke();
 
   // effector: a small light locator dot, not the loudest feature. At size*0.05
-  // it was ~3.2px at 32 — bigger and darker (#333) than the ~2.7px color
+  // it was ~3.2px at the old 32px input — bigger and darker (#333) than the ~2.7px color
   // blocks it exists to help grasp; shrunk + lightened so the blocks win.
   ctx.fillStyle = "#8f8f8f";
   ctx.beginPath();

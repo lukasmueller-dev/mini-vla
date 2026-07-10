@@ -26,6 +26,7 @@
     "eval": "node js/eval/run.mjs",
     "typecheck": "tsc --noEmit -p js",
     "test:e2e": "playwright test",
+    "perf": "playwright test --config playwright.perf.config.ts",
     "release": "node scripts/release.mjs",
     "gen:embeddings": "node js/scripts/gen-embeddings-data.mjs"
   },

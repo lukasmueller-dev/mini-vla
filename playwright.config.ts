@@ -23,6 +23,10 @@ const chromiumGL = {
 export default defineConfig({
   testDir: "./js/test",
   testMatch: "**/*.spec.ts",
+  // perf.spec.ts trains to full convergence and needs a real GPU — it has its
+  // own opt-in config (playwright.perf.config.ts, `npm run perf`) and must NOT
+  // run in this GPU-less CI smoke suite.
+  testIgnore: "**/perf.spec.ts",
   // software-GL training runs are slow; individual asserts poll well under this
   // (js/test/budget.ts holds the per-assert budgets, and scales them on CI)
   timeout: process.env.CI ? 600_000 : 240_000,

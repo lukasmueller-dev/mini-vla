@@ -169,6 +169,34 @@ async function rollout(maxFrames = 1600) {
   };
 }
 
+/** Closed-loop GRASP RATE over `episodes` fresh episodes against the current
+    (post-convergence) policy — the perf suite's soft quality floor. Snapshots
+    the policy ONCE, then drives each episode through the same RolloutEngine the
+    portfolio uses, counting the fraction that actually grasp (carry begins).
+    Mirrors js/eval/main.ts's closedLoopEval, but through the public worker
+    surface so it scores the same path the site ships. */
+async function graspRate(episodes = 12, maxFrames = 1600) {
+  trainer.snapshotPolicy(); // freeze the converged weights for every episode
+  let grasps = 0;
+  for (let e = 0; e < episodes; e++) {
+    const layout = randomLayout();
+    const cmd = sampleCommand(layout);
+    engine.begin(cmd.color, cmd.tokens);
+    let frames = 0;
+    let grasped = false;
+    while (engine.hasEpisode && frames < maxFrames) {
+      const f = engine.step(performance.now(), layout, (a1, a2, t, l, c) =>
+        trainer.predictFrozenTarget(a1, a2, t, l, c)
+      );
+      if (f.carry !== null) grasped = true;
+      frames++;
+      await new Promise((r) => setTimeout(r));
+    }
+    if (grasped) grasps++;
+  }
+  return { episodes, grasps, graspRate: grasps / episodes };
+}
+
 /** Paint both renderers onto fresh DOM canvases and pixel-check them:
     the display scene must draw SOMETHING (alpha coverage) and the model's-eye
     silhouette must contain non-white pixels including genuinely colored
@@ -260,6 +288,7 @@ declare global {
       decode: typeof decode;
       predict: typeof predict;
       rollout: typeof rollout;
+      graspRate: typeof graspRate;
       paintCheck: typeof paintCheck;
       palette: typeof palette;
       probeEmbeddings: typeof probeEmbeddings;
@@ -280,6 +309,7 @@ window.__smoke = {
   decode,
   predict,
   rollout,
+  graspRate,
   paintCheck,
   palette,
   probeEmbeddings,

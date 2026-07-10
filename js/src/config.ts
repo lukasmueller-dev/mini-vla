@@ -204,12 +204,15 @@ export const CONFIG = {
     // training ends, "try it" mode unlocks. `maxBatches` is the fixed fallback.
     converge: {
       /** Handoff threshold on the trailing-window HUBER action loss.
-          Calibration (2026-07 sweep, M4, ~100ms/batch → ~10 batches/s):
-          healthy runs cross 0.02 at 150-280 batches ≈ 15-28s of training and
-          score ~0.7-0.85 closed-loop reach success at handoff (0 wrong-side);
-          the residual ~0.03 reach error is a vision-resolution floor, not
-          undertraining. 2026-07 carry-flag re-gauge (headless SwiftShader ≈
-          0.5x real GPU): pick-up 8c/4b converges ~0.012 at ~410 batches. */
+          Calibration (2026-07, current carry-flag pick-up arch, ~10 gradient
+          batches/s on a mid laptop GPU): at this 0.015 threshold desktop 8c/4b
+          converges BY LOSS at ~415-618 batches (median ~470 ≈ 47s browser) and
+          mobile 4c/3b at ~283-404 (median ~305 ≈ 32s) — measured across 9 seeds,
+          0 hit the fallback, closed-loop grasp 37-96% at handoff. Both currently
+          sit OVER the 30s budget; js/test/perf.spec.ts (`npm run perf`) guards
+          these batch counts against regression, and train.py prints the
+          projected browser time every run. The residual reach error at handoff
+          is a vision-resolution floor, not undertraining. */
       loss: 0.015,
       /** Trailing window (batches) the convergence mean is taken over. Small =
           low detection lag as old high losses roll off; the streak guards
@@ -222,8 +225,9 @@ export const CONFIG = {
           lucky-dip insurance and never binds on healthy runs. */
       minBatches: 100,
       /** Fixed-budget fallback: converge regardless of loss at this batch
-          (~45s at ~10 batches/s). Slow-but-healthy seeds (~1 in 3) land here
-          or shortly before it with a usable policy. NOTE (sweep finding,
+          (~80s at ~10 batches/s). A safety net: in the 2026-07 9-seed sample
+          every run converged by loss well before it (desktop 415-618, mobile
+          283-404). NOTE (sweep finding,
           pre-carry-flag): ~1 in 8 inits collapses to an always-one-side
           policy (loss flat ~0.78) and NEVER recovers — no swept parameter
           fixes it, so a longer budget only delays the fallback. Detectable
@@ -348,7 +352,7 @@ export const CONFIG = {
   demo: {
     /** Synced cycle length. The scripted motion finishes at ~4.26s (phase sums
         below), so 5000 leaves a short REST beat; at ~5s/cycle the viewer sees
-        ~5 policy generations before convergence. rollout.reachTimeout (frames)
+        ~6-9 policy generations before convergence. rollout.reachTimeout (frames)
         must stay ≥ this or a rollout gives up before the cycle resets. */
     periodMs: 5000,
     // Absolute-time trajectory phases (ms), independent of periodMs so the
@@ -407,9 +411,10 @@ export const CONFIG = {
   // ── Training-time estimate shown in the ⚙ run-config menu ──────────────
   // estimateTrainingSeconds (src/run-config.ts) is baseSeconds ×
   // colorFactor × blockFactor. GAUGED 2026-07 against the carry-flag pick-up
-  // architecture (headless SwiftShader runs ≈ 0.5x real GPU, scaled to ~10
-  // batches/s): pick-up 8c/4b ≈ 410 batches ≈ 41s. colors/blocks are small
-  // modifiers around the base.
+  // architecture at ~10 batches/s: desktop 8c/4b converges ~415-618 batches
+  // (mean ≈ 480 ≈ 50s, matching base 42 × 1.1 × 1.1); mobile 4c/3b ~283-404
+  // (mean ≈ 325 ≈ 34s — the 42s estimate is deliberately a little
+  // conservative). colors/blocks are small modifiers around the base.
   eta: {
     baseSeconds: 42,
     colorFactor: { 2: 0.9, 4: 1.0, 8: 1.1 } as Record<number, number>,

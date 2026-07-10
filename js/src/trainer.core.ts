@@ -1000,7 +1000,7 @@ export class VLATrainerCore {
     this.frozenModels = null;
   }
 
-  /** Preprocess a 32x32 RGBA thumb into the model's inverted input tensor. */
+  /** Preprocess an imgSize (48×48) RGBA thumb into the model's inverted input tensor. */
   private visionTensor(img: ImageData): tfType.Tensor4D {
     const tf = this.tf!;
     return tf.tidy(() =>

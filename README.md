@@ -142,8 +142,16 @@ Runs from the repo root against the root `package.json` (the paths point into
 npm install
 npm run demo        # Vite page: watch it train + roll out
 npm run eval        # headless grasp-rate sweep (needs a Chromium)
+npm run test:e2e    # pipeline smoke across the browser×device matrix
+npm run perf        # convergence-perf gate (real GPU; batches-to-converge vs budget)
 npm run typecheck
 ```
+
+`npm run perf` (`js/test/perf.spec.ts`) trains each profile to full convergence
+and asserts it stays within the batch budget in `js/test/perf-budgets.json` — a
+regression guard on the number the < 30 s in-browser budget is built on. It needs
+a real GPU and runs off-CI (a full run is ~500 software-WebGL batches otherwise);
+tuning a budget or adding a task is a JSON edit.
 
 The portfolio consumes this as a git-ref npm dependency
 (`github:…/mini-vla#<tag>`) through the `exports` map in the root `package.json`
@@ -157,7 +165,9 @@ the internal file layout.
 2. **Port to JS** with the Python→JS port skill: it re-expresses `mini_vla/*` →
    `js/src/*` (architecture + task + config + silhouette render; **no weights**).
 3. **Verify JS:** `npm run typecheck`, `npm run demo` (watch train→rollout),
-   `npm run eval` (headless grasp metric).
+   `npm run eval` (headless grasp metric), `npm run test:e2e` (pipeline smoke);
+   after an architecture/config change, `npm run perf` (convergence-perf gate —
+   update `js/test/perf-budgets.json` if the batch budget genuinely moved).
 4. **Regenerate assets** only if the grammar/vocab/quantization changed:
    `npm run gen:embeddings` → rewrites `assets/` and, in lockstep,
    `js/src/vocab.gen.ts` + `mini_vla/vocab_gen.py`.
