@@ -12,6 +12,6 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["src/**/*.ts", "demo/**/*.ts", "eval/**/*.ts"],
+  "include": ["src/**/*.ts", "demo/**/*.ts", "eval/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "**/*.config.ts"]
 }

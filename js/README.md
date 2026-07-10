@@ -83,7 +83,7 @@ Import subpaths (TS source, consumed via a bundler that transpiles it, e.g.
 
 | subpath | exposes |
 |---------|---------|
-| `mini-vla/trainer` | `VLATrainer`, `TrainerStatus`, `PredictResult`, `DecodedCommand` |
+| `mini-vla/trainer` | `VLATrainer`, `VLATrainerOptions`, `TrainerStatus`, `TrainerError`, `PredictResult`, `DecodedCommand` |
 | `mini-vla/rollout` | `RolloutEngine`, `RolloutFrame` |
 | `mini-vla/scene` | `paintScene` (palette + grip), `paintSilhouette`, `sceneMap`, `effectorPx` |
 | `mini-vla/task` | tokenizer/examples (`registerFullVocab`, `sampleCommand`, layouts, colors) + `demoPose`, `makeDemoPlan`, `DEMO_PERIOD_MS` |
@@ -94,6 +94,12 @@ Import subpaths (TS source, consumed via a bundler that transpiles it, e.g.
 `@tensorflow/tfjs` is a **peer dependency** — the host provides exactly one copy
 (it's only ever loaded via a dynamic import inside `trainer.ts`, so importing
 `mini-vla/model` for `IMG_SIZE` stays tfjs-free at runtime).
+
+`new VLATrainer({ assetBase })` names the directory the host serves `assets/`
+from (default `/vla`; see the root README on version-stamping it). A load that
+fails lands on `status: "error"` with an `errorReason`: `"assets"` and `"train"`
+are worth retrying — `start()` restarts from `"error"` and refetches — while
+`"worker"` means the worker chunk itself is gone, so only a page reload helps.
 
 ## Gotchas (read before refactoring)
 

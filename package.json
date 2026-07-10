@@ -1,6 +1,6 @@
 {
   "name": "mini-vla",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Standalone in-browser vision-language-action demo: a TensorFlow.js behavior-cloning policy (action + color + gripper + spatial-attention heads) trained live against an analytical-IK expert, with a policy-rollout engine and two canvas renderers.",
   "type": "module",
   "license": "MIT",
@@ -25,14 +25,17 @@
     "build:demo": "vite build js/demo",
     "eval": "node js/eval/run.mjs",
     "typecheck": "tsc --noEmit -p js",
+    "test:e2e": "playwright test",
+    "release": "node scripts/release.mjs",
     "gen:embeddings": "node js/scripts/gen-embeddings-data.mjs"
   },
   "peerDependencies": {
     "@tensorflow/tfjs": "^4.22.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tensorflow/tfjs": "^4.22.0",
-    "playwright": "^1.49.0",
+    "playwright": "^1.61.1",
     "typescript": "^5.7.3",
     "vite": "^6.0.0"
   }

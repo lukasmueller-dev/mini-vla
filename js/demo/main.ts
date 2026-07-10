@@ -155,7 +155,13 @@ function refreshHud() {
           ? "Trained ✓"
           : trainer.status === "loading"
             ? "Loading…"
-            : "Start Training";
+            : // a dead worker chunk can't be retried in-page, only reloaded;
+              // a failed asset load refetches on the next start()
+              trainer.status === "error"
+              ? trainer.errorReason === "worker"
+                ? "Reload"
+                : "Retry"
+              : "Start Training";
   primaryBtn.disabled =
     trainer.status === "loading" || trainer.status === "converged";
 }
@@ -183,7 +189,9 @@ primaryBtn.onclick = () => {
     if (pauseStart !== null) pausedAccum += performance.now() - pauseStart;
     pauseStart = null;
     trainer.resume();
-  } else if (trainer.status === "idle") {
+  } else if (trainer.status === "error" && trainer.errorReason === "worker") {
+    location.reload();
+  } else if (trainer.status === "idle" || trainer.status === "error") {
     resetState();
     trainStart = performance.now() + 500; // brief hold on the resting scene
     trainer.start(onUpdate);
