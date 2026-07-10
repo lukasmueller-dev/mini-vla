@@ -30,3 +30,9 @@ export const TRAIN_MS = CI ? 300_000 : 120_000;
 
 /** First batches, and control round-trips — must fail FAST when wedged. */
 export const WEDGE_MS = CI ? 150_000 : 60_000;
+
+/** How long the batch counter must hold still before we call training stopped.
+    Must exceed ONE gradient step, or a slow step in progress reads as "settled":
+    a software-GL step on a CI runner is ~3.5s (webkit-iphone trains 30 batches
+    in ~1.7min), against ~50ms on a laptop GPU. */
+export const SETTLE_MS = CI ? 12_000 : 3_000;
