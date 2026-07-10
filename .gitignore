@@ -3,6 +3,10 @@ dist/
 .DS_Store
 *.log
 
+# Playwright (js/test)
+test-results/
+playwright-report/
+
 # Python (mini_vla dev)
 .venv/
 __pycache__/
