@@ -209,7 +209,7 @@ Phase 6.
 1. Bump the version in **`package.json`** and **`pyproject.toml`** together.
 2. Commit; `git tag vX.Y.Z`; push the tag.
 3. **Portfolio repo (downstream — this is what makes it live):**
-   - Bump the dependency to the new tag: `github:lbm2001/mini-vla#vX.Y.Z`, then
+   - Bump the dependency to the new tag: `github:lukasmueller-dev/mini-vla#vX.Y.Z`, then
      `npm install`.
    - **If assets changed (Phase 4):** copy `assets/embeddings-50d.bin` +
      `assets/vocab.txt` into the portfolio's `public/vla/`.
@@ -246,10 +246,10 @@ portfolio repo. Do not edit the portfolio repo from here.
 ```
 You are working in the portfolio-site repo. The `mini-vla` package was updated
 and released as {{vX.Y.Z}}. It is consumed as a git-ref dependency
-(github:lbm2001/mini-vla#<tag>) with transpilePackages and served assets under
+(github:lukasmueller-dev/mini-vla#<tag>) with transpilePackages and served assets under
 public/vla/. Apply the update end to end:
 
-1. Bump the mini-vla dependency to `github:lbm2001/mini-vla#{{vX.Y.Z}}`, run npm install.
+1. Bump the mini-vla dependency to `github:lukasmueller-dev/mini-vla#{{vX.Y.Z}}`, run npm install.
 {{IF ASSETS CHANGED}}2. Copy the new embedding assets into public/vla/
    (embeddings-50d.bin + vocab.txt) from the mini-vla repo's assets/.{{/IF}}
 3. The model contract changed as follows — update the Hero component and its

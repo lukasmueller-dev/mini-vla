@@ -22,6 +22,7 @@
 //                            is what the demo/eval pages and the host rely on)
 
 import { VLATrainer } from "../../src/trainer";
+import { ReplayTrainer } from "../../src/trainer.replay";
 import { embeddingMatrix, loadEmbeddings } from "../../src/embeddings";
 import { RolloutEngine } from "../../src/rollout";
 import { paintScene, paintSilhouette, DEFAULT_PALETTE } from "../../src/scene";
@@ -67,7 +68,25 @@ const cfg: RunConfig = PRESETS[presetName] ?? DEFAULT_RUN_CONFIG;
 const maxBatches = Number(q.get("max")) || 0;
 // omitted ⇒ pass nothing, exercising the zero-wiring "/vla" default path
 const assetBase = q.get("assetBase") ?? undefined;
-const trainer = new VLATrainer({ assetBase });
+// ?replayFallback=1 arms the fallback on the real VLATrainer (a stall/error
+// then swaps in the replay). ?forceReplay=1 drives a ReplayTrainer DIRECTLY —
+// the deterministic way to exercise the replayed run (scripted loss + real CPU
+// rollout) without simulating a 7.5s wedge. Both share the surface the helpers
+// below use.
+const forceReplay = q.get("forceReplay") === "1";
+const replayFallback = q.get("replayFallback") === "1";
+// ?watchdogMs=N shrinks the load watchdog so a spec can force the stall→replay
+// swap deterministically: a tiny value fires before the real path's first batch
+// (which takes seconds), so the fallback engages on a HEALTHY run.
+const watchdogMs = Number(q.get("watchdogMs"));
+if (watchdogMs > 0) CONFIG.replay.watchdogMs = watchdogMs;
+const trainer: VLATrainer | ReplayTrainer = forceReplay
+  ? new ReplayTrainer()
+  : new VLATrainer({ assetBase, replayFallback });
+const doStart = forceReplay
+  ? () => (trainer as ReplayTrainer).start(onUpdate, assetBase)
+  : () => (trainer as VLATrainer).start(onUpdate, cfg);
+const mode = forceReplay ? "replay" : forceInline ? "inline" : "worker";
 const engine = new RolloutEngine();
 
 const hud = document.getElementById("hud")!;
@@ -79,10 +98,16 @@ const onUpdate = () => {
   )
     trainer.pause(); // soft cap — weights stay inspectable, same as the eval page
   hud.textContent =
-    `preset=${presetName} mode=${forceInline ? "inline" : "worker"}\n` +
+    `preset=${presetName} mode=${mode}\n` +
     `status=${trainer.status} batches=${trainer.batches} ` +
     `smooth=${trainer.smoothLoss.toFixed(4)} errors=${errors.length}`;
 };
+
+/** The full loss curve — a spec compares two runs' curves to assert the replay
+    varies between visits (never byte-identical). */
+function lossCurve() {
+  return trainer.lossHistory.slice();
+}
 
 /** Serializable trainer telemetry snapshot. */
 function state() {
@@ -96,6 +121,9 @@ function state() {
     ready: trainer.ready,
     samples: trainer.samples,
     lossNorm: trainer.lossNorm(),
+    // true once the replay fallback is standing in (forced, or swapped in after
+    // a stall/error) — the spec asserts the swap actually happened
+    usingReplay: forceReplay ? true : (trainer as VLATrainer).usingReplay,
     numColors: runConfig().numColors,
     maxBlocks: runConfig().maxBlocks,
     errors: [...errors],
@@ -282,13 +310,14 @@ declare global {
   interface Window {
     __smoke?: {
       preset: string;
-      mode: "worker" | "inline";
+      mode: "worker" | "inline" | "replay";
       assetBase: string | undefined;
       state: typeof state;
       decode: typeof decode;
       predict: typeof predict;
       rollout: typeof rollout;
       graspRate: typeof graspRate;
+      lossCurve: typeof lossCurve;
       paintCheck: typeof paintCheck;
       palette: typeof palette;
       probeEmbeddings: typeof probeEmbeddings;
@@ -303,17 +332,18 @@ declare global {
 
 window.__smoke = {
   preset: presetName,
-  mode: forceInline ? "inline" : "worker",
+  mode,
   assetBase,
   state,
   decode,
   predict,
   rollout,
   graspRate,
+  lossCurve,
   paintCheck,
   palette,
   probeEmbeddings,
-  start: () => trainer.start(onUpdate, cfg),
+  start: doStart,
   pause: () => trainer.pause(),
   resume: () => trainer.resume(),
   reset: () => trainer.reset(),
@@ -321,4 +351,4 @@ window.__smoke = {
 };
 
 onUpdate();
-if (q.get("autostart") !== "0") trainer.start(onUpdate, cfg);
+if (q.get("autostart") !== "0") doStart();

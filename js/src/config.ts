@@ -372,6 +372,34 @@ export const CONFIG = {
     jitter: { graspX: 0.012, graspY: 0.008, viaTheta1: 0.3, viaTheta2: 0.45 },
   },
 
+  // ── Replay fallback (src/trainer.replay.ts) ────────────────────────────
+  // The scripted-loss + real-rollout stand-in shown when live training can't
+  // run (iOS/iPadOS dead WebGL context). It replays a captured bad→good policy
+  // ladder (assets/replay/, npm run gen:replay) on the CPU backend.
+  replay: {
+    /** How long the real path may sit in Loading (Language Warmup) without a
+        first training batch before VLATrainer gives up on it and swaps in the
+        replay — the "dead-on-arrival WebGL context" wedge, where tf.ready never
+        settles and the worker posts nothing at all. Also the fallback fires
+        immediately on a thrown error. Host-visible watchdogs stay as an outer
+        net (see the portfolio handoff). */
+    watchdogMs: 7500,
+    /** Scripted run length in batches (the converged rung is repositioned to
+        the end). At ~10 batches/s this is the wall-clock: 230–275 → ~23–28s,
+        matched to a real converged run so the two are indistinguishable. Each
+        visit draws uniformly in [min,max], so durations vary. */
+    minBatches: 230,
+    maxBatches: 275,
+    /** Per-VISIT shift (±fraction) of the progress→rung mapping, so the bad→good
+        TIMING differs between visits, not just the (already-random) scene. */
+    thresholdJitter: 0.12,
+    /** Anchored-procedural loss noise: an AR(1) walk in log-space around the
+        anchor curve. rho = batch-to-batch correlation, sigma = step size —
+        together they read as a real noisy loss rather than white jitter. */
+    noiseRho: 0.7,
+    noiseSigma: 0.06,
+  },
+
   // ── Rollout control + episode timing (components/Hero.tsx) ─────────────
   rollout: {
     /** Proportional gain toward the predicted target each frame (0..1). */
