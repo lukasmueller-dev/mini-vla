@@ -11,12 +11,14 @@ This repo has two sides:
 |---|---|---|
 | **`mini_vla/`** (+ `train.py`) | **the model — source of truth** | Python / Keras. Where the architecture, config, and wandb experiments are actively developed. |
 | **`js/`** | **the output artifact** | A TensorFlow.js re-expression of the same architecture + task that trains *live in the browser*, embedded on the portfolio. Regenerated **from** the Python. |
-| **`assets/`** | **shared, framework-neutral** | Pretrained int8 GloVe table (`embeddings-50d.bin`, `vocab.txt`) + the slot-grammar word inventory (`grammar.json`). Read by both sides. |
+| **`assets/`** | **shared, framework-neutral** | Pretrained int8 GloVe table (`embeddings-50d.bin`, `vocab.txt`) + the slot-grammar word inventory (`grammar.json`), read by both sides — plus `replay/` (a captured policy ladder + `manifest.json`) that the JS **replay fallback** ships. |
 
 The two sides are kept in **architecture + task parity, not weight parity**: the
 browser demo retrains from scratch (that's its whole point), so `js/` mirrors the
 network shape, the task, the config, and the silhouette render — never a trained
-checkpoint.
+checkpoint. The lone exception is `assets/replay/`: a handful of small policy
+checkpoints (embedding/grid excluded) captured along one real run, which the
+replay fallback (below) plays on devices that **can't** train live.
 
 ### Serving the assets (`assetBase`)
 
@@ -39,6 +41,62 @@ also validates the fetched bytes against the constants compiled in from
 reach the model as a silently NaN-poisoned table.
 
 (`grammar.json` is a bundle-time import, not a fetch; `assetBase` doesn't apply.)
+
+### Replay fallback (`replayFallback`)
+
+Live training needs to update conv weights, which requires a working WebGL
+context — and on **iOS/iPadOS WebKit** every browser shares a process-wide cap on
+live GL contexts, so the hero's worker context can die on arrival and never
+recover. WASM can't rescue it either: `@tensorflow/tfjs-backend-wasm` has no
+`Conv2DBackpropFilter` kernel, so the model can't train there at all (and plain
+CPU training is ~5 min — far past the demo budget).
+
+Opt in with `new VLATrainer({ replayFallback: true })`. Then if a run never
+reaches its first training batch within `CONFIG.replay.watchdogMs` (the
+dead-on-arrival wedge) **or** it errors out, VLATrainer transparently swaps in a
+**replay** behind the same surface — the host UI just keeps rendering, and never
+learns *why* the real path failed. The replay:
+
+- runs a **pretrained policy on the CPU backend** (no GL context) for genuine
+  rollouts — inference is a few passes/sec, unlike training's hundreds of
+  batches, so CPU is plenty;
+- shows a **real bad→good progression** by selecting rungs of the captured ladder
+  (`assets/replay/`) by training progress — early cycles roll out a genuinely
+  clumsy policy, later ones a good one;
+- scripts only the **loss curve**, drawn through the checkpoints' real
+  `(samples, loss)` anchors with correlated noise over a per-visit-randomized
+  ~25s, so no two runs look identical.
+
+A host serving a versioned `assetBase` must deploy the **whole** `assets/` tree
+(the replay fetches `replay/manifest.json` + `replay/ckpt-*.bin` from it). If
+those 404, the replay surfaces `errorReason: "assets"` and the host's own outer
+watchdog takes over — never a new hang. Regenerate the ladder with
+`npm run gen:replay` (dev-only; see `js/capture/`).
+
+### Failure handling (and what `replayFallback` changes)
+
+The package **detects** failures the same way with or without the replay; what
+changes is the **outcome**. With `replayFallback: true`, every failure below is
+turned into an internal swap-trigger instead of a terminal error — so the only
+user-visible terminal that survives is `"assets"`.
+
+| Detector | Catches | Without replay | With `replayFallback` |
+|---|---|---|---|
+| **Load watchdog** (`CONFIG.replay.watchdogMs`, VLATrainer) | no first batch in time — `tf.ready` wedged, worker silent (iOS dead-on-arrival) | — (host's own watchdog) | → **swap to replay** |
+| **GL context-loss** (`installGLWatchdog`: `isContextLost` + `webglcontextlost`) | context dead on arrival / lost mid-run | → `error` / `"context"` | detector → `error` → **swap** |
+| **Zero-loss guard** (`NONPHYSICAL_LIMIT`) | silent-zeros dead context (no throw, no event) — WebKit returns zeros | → `"context"` | detector → **swap** |
+| **Worker load failure** (`handleWorkerFailure`) | dead worker chunk (stale content-hash) | → `"worker"` | → **swap** |
+| **Thrown gradient step** (`start()` catch) | an op throws mid-step | → cpu-backend retry, else `"train"` | → `"train"` **immediately** (`skipCpuFallback`) → **swap** (the replay beats ~5-min cpu training) |
+| **Asset load failure** (`loadEmbeddings`) | embeddings **or** replay checkpoints 404 / shape-mismatch | → `"assets"` | → `"assets"` (real path → replay tries same base → also fails → **`"assets"` stands**) |
+
+`maybeDisableWebGLFence` is a *workaround*, not a detector — it keeps the real
+WebGL path from wedging on iOS/desktop Safari and is unrelated to the replay.
+
+So `"context"`, `"worker"` and `"train"` remain in the `TrainerError` union for
+`replayFallback: false` consumers, but with the fallback on they are intercepted
+before the host sees them. **`"assets"` is the one true terminal** — if the bytes
+are genuinely unreachable, nothing (real or replay) can run, and the host's outer
+net shows a reload/retry card.
 
 ## Architecture
 

@@ -54,7 +54,13 @@ import type { Layout } from "./examples";
 import { setRunConfig, type RunConfig } from "./run-config";
 
 export type WorkerRequest =
-  | { t: "start"; gen: number; cfg: RunConfig; assetBase?: string }
+  | {
+      t: "start";
+      gen: number;
+      cfg: RunConfig;
+      assetBase?: string;
+      replayFallback?: boolean;
+    }
   | { t: "pause"; gen: number }
   | { t: "resume"; gen: number }
   | { t: "reset"; gen: number }
@@ -132,6 +138,9 @@ onmessage = (e: MessageEvent<WorkerRequest>) => {
       // separate from the main thread's
       setRunConfig(msg.cfg);
       assetBase = msg.assetBase;
+      // with a replay standing by on the main thread, a thrown step should
+      // surface "train" (→ swap to replay) rather than grind on the cpu backend
+      core.skipCpuFallback = msg.replayFallback ?? false;
       // core.start resolves only when training ends; postState is its
       // per-batch onUpdate. The vocab rides along once the embeddings land.
       void core.start(postState, assetBase);

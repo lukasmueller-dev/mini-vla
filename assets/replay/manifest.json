@@ -1,0 +1,163 @@
+{
+  "batchSize": 32,
+  "cadencePerSec": 10,
+  "floorLoss": 0.015,
+  "weightSpecs": [
+    {
+      "name": "conv1/0",
+      "shape": [
+        3,
+        3,
+        3,
+        8
+      ]
+    },
+    {
+      "name": "conv1/1",
+      "shape": [
+        8
+      ]
+    },
+    {
+      "name": "conv2/0",
+      "shape": [
+        3,
+        3,
+        8,
+        16
+      ]
+    },
+    {
+      "name": "conv2/1",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "attn_score/0",
+      "shape": [
+        7,
+        50,
+        1
+      ]
+    },
+    {
+      "name": "attn_score/1",
+      "shape": [
+        1
+      ]
+    },
+    {
+      "name": "conv3/0",
+      "shape": [
+        3,
+        3,
+        16,
+        24
+      ]
+    },
+    {
+      "name": "conv3/1",
+      "shape": [
+        24
+      ]
+    },
+    {
+      "name": "pick_query/0",
+      "shape": [
+        51,
+        24
+      ]
+    },
+    {
+      "name": "pick_query/1",
+      "shape": [
+        24
+      ]
+    },
+    {
+      "name": "dense_Dense1/0",
+      "shape": [
+        77,
+        64
+      ]
+    },
+    {
+      "name": "dense_Dense1/1",
+      "shape": [
+        64
+      ]
+    },
+    {
+      "name": "action/0",
+      "shape": [
+        64,
+        4
+      ]
+    },
+    {
+      "name": "action/1",
+      "shape": [
+        4
+      ]
+    },
+    {
+      "name": "color/0",
+      "shape": [
+        50,
+        8
+      ]
+    },
+    {
+      "name": "color/1",
+      "shape": [
+        8
+      ]
+    },
+    {
+      "name": "gripper/0",
+      "shape": [
+        64,
+        1
+      ]
+    },
+    {
+      "name": "gripper/1",
+      "shape": [
+        1
+      ]
+    }
+  ],
+  "checkpoints": [
+    {
+      "samples": 32,
+      "loss": 0.86791,
+      "file": "ckpt-0.bin"
+    },
+    {
+      "samples": 1280,
+      "loss": 0.38282,
+      "file": "ckpt-1.bin"
+    },
+    {
+      "samples": 2880,
+      "loss": 0.12044,
+      "file": "ckpt-2.bin"
+    },
+    {
+      "samples": 4800,
+      "loss": 0.08383,
+      "file": "ckpt-3.bin"
+    },
+    {
+      "samples": 7040,
+      "loss": 0.03692,
+      "file": "ckpt-4.bin"
+    },
+    {
+      "samples": 15776,
+      "loss": 0.01215,
+      "file": "ckpt-5.bin"
+    }
+  ]
+}
