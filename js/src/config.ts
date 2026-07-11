@@ -382,7 +382,8 @@ export const CONFIG = {
         replay — the "dead-on-arrival WebGL context" wedge, where tf.ready never
         settles and the worker posts nothing at all. Also the fallback fires
         immediately on a thrown error. Host-visible watchdogs stay as an outer
-        net (see the portfolio handoff). */
+        net (see the portfolio handoff). Per-trainer override:
+        VLATrainerOptions.replayWatchdogMs. */
     watchdogMs: 7500,
     /** Scripted run length in batches (the converged rung is repositioned to
         the end). At ~10 batches/s this is the wall-clock: 230–275 → ~23–28s,
