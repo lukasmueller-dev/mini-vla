@@ -61,6 +61,14 @@ export interface ScenePalette {
   effectorOpenEdge: string;
   /** CLOSED (grasping) effector jaw fill. */
   effectorClosed: string;
+  /** Cosmetic per-COLORS-index block fill for the DISPLAY scene only.
+      Omitted → COLORS[i].hex (today's behavior). Lets the host recolor a block
+      that would vanish against a themed floor (e.g. the dark "black" block)
+      without touching the trained color hexes. paintSilhouette ignores this. */
+  blockColor?: (index: number, defaultHex: string) => string;
+  /** Optional thin outline stroked around every block (display scene only) so
+      dark-on-dark / light-on-light stays legible. Omitted → no stroke. */
+  blockEdge?: string;
 }
 
 export const DEFAULT_PALETTE: ScenePalette = {
@@ -146,17 +154,26 @@ export function paintScene(
   // blocks first — the WHOLE arm draws over them so the reach into a block
   // and the grip on a carried one stay visible. Each block draws at its own
   // randomized side length, bottom at its rest height (y, normally 0).
+  const blockFill = (i: number) =>
+    palette.blockColor?.(i, COLORS[i].hex) ?? COLORS[i].hex;
+  const drawBlock = (i: number, x: number, y: number, box: number) => {
+    ctx.fillStyle = blockFill(i);
+    ctx.fillRect(x, y, box, box);
+    if (palette.blockEdge) {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = palette.blockEdge;
+      ctx.strokeRect(x, y, box, box);
+    }
+  };
   for (const b of layout) {
     if (b.color === carry) continue; // carried block leaves its floor spot
     const box = b.size * m.S;
     const rest = (b.y ?? 0) * m.S;
-    ctx.fillStyle = COLORS[b.color].hex;
-    ctx.fillRect(m.X(b.x) - box / 2, m.floorY - rest - box, box, box);
+    drawBlock(b.color, m.X(b.x) - box / 2, m.floorY - rest - box, box);
   }
   if (carry !== null && carry !== undefined) {
     const box = (layout.find((b) => b.color === carry)?.size ?? BLOCK) * m.S;
-    ctx.fillStyle = COLORS[carry].hex;
-    ctx.fillRect(ex - box / 2, ey - box / 2, box, box);
+    drawBlock(carry, ex - box / 2, ey - box / 2, box);
   }
 
   // base pedestal, from the shoulder joint down to the floor
