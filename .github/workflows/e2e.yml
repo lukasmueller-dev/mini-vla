@@ -103,3 +103,25 @@ jobs:
           echo "test:      ${{ needs.test.result }}"
           [ "${{ needs.typecheck.result }}" = "success" ] \
             && [ "${{ needs.test.result }}" = "success" ]
+
+  # A green v* tag IS a mini-vla release. Tell portfolio-site to bump its pin so
+  # the live demo tracks this version near-instantly (vs. an hourly poll).
+  #
+  # Runs only on tag pushes, only after the full e2e suite is green (`needs: e2e`
+  # + default success gate). It must use a PAT, not the default GITHUB_TOKEN:
+  # GITHUB_TOKEN cannot reach another repo, and events it raises are barred from
+  # triggering workflows there. secrets.PORTFOLIO_DISPATCH_TOKEN is a
+  # fine-grained PAT scoped to lukasmueller-dev/portfolio-site with Contents:
+  # write (enough to POST /dispatches; add Workflows: write only if the listener
+  # ever edits .github/workflows). See the listener in portfolio-site.
+  dispatch-portfolio:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PORTFOLIO_DISPATCH_TOKEN }}
+          repository: lukasmueller-dev/portfolio-site
+          event-type: mini-vla-release
+          client-payload: '{"tag": "${{ github.ref_name }}"}'
