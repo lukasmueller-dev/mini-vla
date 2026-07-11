@@ -108,6 +108,16 @@ const CONVERGE_STREAK = CONFIG.trainer.converge.streak;
 const MIN_BATCHES = CONFIG.trainer.converge.minBatches;
 const MAX_BATCHES = CONFIG.trainer.converge.maxBatches;
 
+// Zero-loss / context-loss guard (see the training loop + installGLWatchdog).
+// A real Huber action loss for this task floors ~0.012 and is never exactly 0,
+// so a loss at/below LOSS_FLOOR (or non-finite) is NON-PHYSICAL — the signature
+// of a silently-dead WebGL context (WebKit returns zeros instead of throwing).
+// Such a loss must never count toward convergence, and NONPHYSICAL_LIMIT of
+// them in a row stops the run to reason "context" rather than looping to
+// MAX_BATCHES producing a garbage policy.
+const LOSS_FLOOR = 1e-4;
+const NONPHYSICAL_LIMIT = 8;
+
 // Main-optimizer LR schedule (see config.ts lrSchedule): a linear ramp
 // start→peak over warmupBatches, then inverse-time decay toward floor.
 const LR_START = CONFIG.trainer.lrSchedule.start;
@@ -174,16 +184,46 @@ function angleErr(pred: number, label: number): number {
  * Gate notes: NOT tfjs's own `IS_SAFARI` flag. That tests `navigator.vendor`,
  * and WorkerNavigator does not expose it (`vendor`/`vendorSub`/`productSub` are
  * window-only), so it reads FALSE inside the worker on iOS — exactly where this
- * must fire. `userAgent` IS exposed there. Every iOS browser is WebKit
- * underneath (CriOS, FxiOS, EdgiOS) and shares the bug; none carry a "Chrome/"
- * token, while desktop Chrome/Edge do and Firefox has no AppleWebKit token.
+ * must fire. `userAgent` IS exposed there.
+ *
+ * The gate is "is this WebKit-on-iOS/iPadOS", NOT "is this Safari": the fence
+ * bug is a WebKit-on-iOS defect, and EVERY iOS/iPadOS browser is WebKit
+ * underneath whatever chrome it wears — Safari, plus the re-skins Chrome
+ * (CriOS), Edge (EdgiOS) and Firefox (FxiOS). All share the bug, so all must
+ * get the flag; a Safari-only gate would let e.g. iPad Chrome's CriOS build
+ * wedge. Real DESKTOP Chrome/Edge must be EXCLUDED (the fence API works there,
+ * and disabling it forces slow synchronous readbacks): those carry a
+ * "Chrome/"/"Edg/" token with no iOS marker.
+ *
+ * LIMITATION — the iPad-masquerading-as-desktop case: iPadOS defaults to
+ * desktop-class browsing, so iPad Safari sends a *macOS* UA with no iOS marker
+ * at all. That still gets the flag here (via the AppleWebKit-and-not-Chromium
+ * branch, harmless on real desktop Safari too). But an iPad *Chrome* in that
+ * mode can send a UA indistinguishable from desktop Chrome ("Chrome/" +
+ * "Safari/537.36", no CriOS) and slips through. The usual escape hatch
+ * (navigator.platform==='iPad' || (platform==='MacIntel' && maxTouchPoints>1))
+ * is out of reach: WorkerNavigator exposes neither maxTouchPoints nor a
+ * trustworthy platform, and this runs in the worker — so we accept that
+ * residual gap rather than risk disabling the fence on real desktop Chrome.
  *
  * Verified on iPhone (iOS 18.7 / Safari 26.5): converges in ~6s with this,
- * hangs at batch 1 without it. No effect on Chrome, where the gate is false.
+ * hangs at batch 1 without it. No effect on desktop Chrome, where the gate is
+ * false.
  */
 function maybeDisableWebGLFence(tf: typeof tfType): void {
   const ua = typeof navigator === "undefined" ? "" : (navigator.userAgent ?? "");
-  if (/AppleWebKit/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua))
+  if (!/AppleWebKit/.test(ua)) return; // Gecko / non-WebKit — no fence bug
+  // Explicit iOS/iPadOS markers: the platform tokens (Safari + any mobile-mode
+  // browser) OR one of the WebKit re-skins' tokens.
+  const iosWebKit = /iPad|iPhone|iPod|CriOS|EdgiOS|FxiOS/.test(ua);
+  // AppleWebKit with no iOS marker and no desktop-Chromium token ⇒ Safari:
+  // desktop macOS Safari, or iPad Safari sending its default macOS UA. Firing
+  // here is harmless on desktop Safari (readbacks just go synchronous, off the
+  // main thread in the worker) and is what covers that iPad-as-macOS case.
+  // Real desktop Chrome/Edge (and Android Chrome) carry Chrome//Edg/ and are
+  // excluded; desktop Firefox has no AppleWebKit token and returned above.
+  const safariLike = !/Chrome|Chromium|Edg\//.test(ua);
+  if (iosWebKit || safariLike)
     tf.env().set("WEBGL_FENCE_API_ENABLED", false);
 }
 
@@ -208,8 +248,17 @@ export type TrainerStatus =
  *    dead URL. Only a page reload can help. Offer "Reload".
  *  - "train" — a gradient step threw and even the cpu-backend fallback failed.
  *    Rare; treat like "assets" (a retry rebuilds the model from scratch).
+ *  - "context" — the worker's WebGL context was lost (see installGLWatchdog).
+ *    On iPadOS WebKit the OS can evict a worker's GL context — dead on arrival
+ *    (tf.ready resolves against a dead context) or mid-run — and WebKit does
+ *    NOT throw: readbacks silently return zeros, so a batch's loss reads as 0
+ *    and, unguarded, a run of zeros would false-converge the streak. This is
+ *    the SILENT-ZEROS path, distinct from "train" (a THROWN gradient error).
+ *    RETRYING IN-PAGE IS FUTILE: a lost context never recovers without a new
+ *    backend, and a fresh one is liable to be evicted again under the same
+ *    pressure. Offer "Reload" (like "worker").
  */
-export type TrainerError = "assets" | "worker" | "train";
+export type TrainerError = "assets" | "worker" | "train" | "context";
 
 /** One policy inference: the action plus the "where the model looks" viz,
     all read from a single forward pass of the viz twin (see model.ts). */
@@ -310,6 +359,20 @@ export class VLATrainerCore {
   private running = false;
   private paused = false;
   private convergeStreak = 0;
+  /** Consecutive NON-PHYSICAL batch losses (0 / non-finite). A real Huber
+      action loss floors ~0.012 and is never 0, so a run of these means the GL
+      context is silently dead (WebKit returns zeros, doesn't throw) — see the
+      training loop's zero-loss guard. Reset per run. */
+  private nonPhysicalStreak = 0;
+  /** Latched true once the worker's WebGL context is lost — checked immediately
+      after tf.ready() and via a webglcontextlost listener (installGLWatchdog).
+      A lost context never recovers without a new backend, so this does NOT
+      reset across runs: every subsequent start() fails fast to reason
+      "context". */
+  private glContextLost = false;
+  /** True once the webglcontextlost listener is attached, so restarts don't
+      stack duplicate listeners on the persistent backend canvas. */
+  private glWatchdogInstalled = false;
   /** Guards against overlapping start() calls after a quick reset+restart. */
   private runId = 0;
   private sceneCanvas: CanvasImageSource | null = null;
@@ -799,6 +862,62 @@ export class VLATrainerCore {
   }
 
   /**
+   * Wire up WebGL context-loss detection at the SOURCE, against the (persistent)
+   * webgl backend. On iPadOS Safari/WebKit the OS enforces a process-wide cap on
+   * live WebGL contexts, and bfcache keeps closed tabs' worker contexts alive —
+   * so a fresh context can be evicted the instant it's created (dead on arrival)
+   * or lost mid-run. WebKit does NOT throw when it happens: GL readbacks silently
+   * return zeros, so trainOnBatch's loss reads back as 0. This detects both:
+   *   - context already dead → latch glContextLost so start() fails fast;
+   *   - else attach a one-time webglcontextlost listener that latches the flag if
+   *     it dies mid-run (the training loop checks the flag each batch).
+   * The zero-loss guard in the loop is the belt-and-braces backstop for the case
+   * where zeros arrive without a fired event.
+   *
+   * No-op unless the active backend is webgl — the cpu fallback and non-webgl
+   * envs (Node eval, some test harnesses) have no GL context.
+   */
+  private installGLWatchdog(): void {
+    const tf = this.tf!;
+    if (tf.getBackend() !== "webgl") return;
+    // tfjs 4.x: the webgl backend exposes its GL context via
+    // getGPGPUContext().gl. tf.backend() is typed as the abstract KernelBackend
+    // in the umbrella package, so reach the concrete accessor through a narrow
+    // cast (confirmed against @tensorflow/tfjs 4.22).
+    const backend = tf.backend() as unknown as {
+      getGPGPUContext?: () => { gl: WebGLRenderingContext };
+    };
+    const gl = backend.getGPGPUContext?.().gl;
+    if (!gl) return; // backend shape unexpected — nothing to watch
+    if (gl.isContextLost()) {
+      this.glContextLost = true;
+      return;
+    }
+    if (this.glWatchdogInstalled) return;
+    // The context lives on the backend's canvas (an OffscreenCanvas in the
+    // worker), which persists across runs — attach once. We deliberately do NOT
+    // preventDefault(): that would ask WebKit to try restoring the context,
+    // whereas we want to latch and bail to reason "context".
+    const canvas = gl.canvas as unknown as EventTarget | null;
+    canvas?.addEventListener("webglcontextlost", () => {
+      this.glContextLost = true;
+    });
+    this.glWatchdogInstalled = true;
+  }
+
+  /** Bail the current run to the "context" error state — the WebGL context was
+      lost (dead on arrival, event-signalled, or inferred from a run of silent-
+      zero losses). Mirrors the load-failure error path but with reason
+      "context". Deliberately does NOT dispose the models: their tensors live on
+      a dead GL context, and the next start()/reset() disposes anyway. */
+  private failContextLost(onUpdate?: () => void): void {
+    this.running = false;
+    this.status = "error";
+    this.errorReason = "context";
+    onUpdate?.();
+  }
+
+  /**
    * Load tfjs (first call only), build a fresh model and run batches until
    * pause/reset or convergence. onUpdate fires after every batch.
    *
@@ -852,6 +971,18 @@ export class VLATrainerCore {
     }
     if (!this.running || this.runId !== myRun) return; // reset while loading
 
+    // With the (webgl) backend ready, wire up context-loss detection at the
+    // source and fail fast if the context is already dead. On iPadOS a worker's
+    // GL context can be evicted the instant it's created (process-wide live-
+    // context cap + bfcache), and WebKit returns zeros rather than throwing —
+    // this is the on-arrival guard; the zero-loss guard in the loop is the mid-
+    // run backstop.
+    this.installGLWatchdog();
+    if (this.glContextLost) {
+      this.failContextLost(onUpdate);
+      return;
+    }
+
     this.disposeModels();
     this.models = buildVLAModel(this.tf, embed);
     this.loss = NaN;
@@ -860,6 +991,7 @@ export class VLATrainerCore {
     this.lossHistory = [];
     this.batches = 0;
     this.convergeStreak = 0;
+    this.nonPhysicalStreak = 0;
     this.probes = [];
 
     try {
@@ -878,6 +1010,12 @@ export class VLATrainerCore {
       // rendered batch.
       const warmupLoss = await this.trainStep();
       if (!this.running || this.runId !== myRun) return;
+      // A context lost during the shader warm-up would seed the whole run with
+      // zeros — bail here rather than flicker into "training" first.
+      if (this.glContextLost) {
+        this.failContextLost(onUpdate);
+        return;
+      }
       this.loss = warmupLoss;
       this.smoothLoss = warmupLoss;
       this.initialLoss = warmupLoss;
@@ -895,6 +1033,30 @@ export class VLATrainerCore {
         const t0 = performance.now();
         const loss = await this.trainStep();
         if (!this.running || this.runId !== myRun) break;
+
+        // A webglcontextlost event during this batch (installGLWatchdog) means
+        // every readback from here on is silently zeroed — bail before this
+        // garbage batch can touch the convergence logic.
+        if (this.glContextLost) {
+          this.failContextLost(onUpdate);
+          return;
+        }
+
+        // Zero-loss guard: a real Huber action loss is finite and > LOSS_FLOOR;
+        // a 0 / non-finite loss is the silent-zeros signature of a dead GL
+        // context (WebKit doesn't throw). Count consecutive non-physical batches
+        // and, after NONPHYSICAL_LIMIT of them, stop to reason "context" instead
+        // of looping to MAX_BATCHES on garbage. Distinct from the catch block's
+        // cpu fallback, which handles THROWN gradient errors.
+        const physical = Number.isFinite(loss) && loss > LOSS_FLOOR;
+        if (physical) {
+          this.nonPhysicalStreak = 0;
+        } else if (++this.nonPhysicalStreak >= NONPHYSICAL_LIMIT) {
+          this.glContextLost = true; // latch for any later start()
+          this.failContextLost(onUpdate);
+          return;
+        }
+
         this.loss = loss;
         if (Number.isNaN(this.initialLoss)) this.initialLoss = loss;
         // keep the FULL curve from batch 0 → now (capped only by MAX_BATCHES),
@@ -912,7 +1074,10 @@ export class VLATrainerCore {
           await this.runProbe();
 
         // converged? training's job is done — keep the model, stop the loop.
-        if (this.batches >= MIN_BATCHES && this.smoothLoss < CONVERGE_LOSS) {
+        // Gate on `physical`: a non-physical (zeroed) loss must never advance
+        // the streak, so a dead context can never satisfy convergence — even if
+        // its zeros drag smoothLoss under CONVERGE_LOSS.
+        if (physical && this.batches >= MIN_BATCHES && this.smoothLoss < CONVERGE_LOSS) {
           this.convergeStreak++;
         } else {
           this.convergeStreak = 0;
@@ -943,6 +1108,11 @@ export class VLATrainerCore {
       if (this.tf.getBackend() !== "cpu") {
         console.warn("VLA trainer falling back to the cpu backend");
         this.running = false;
+        // A lost WebGL context is one reason a step throws here — but the cpu
+        // backend doesn't touch GL, so it's a valid recovery. Clear the latch
+        // so the cpu restart's on-arrival guard doesn't immediately fail fast to
+        // "context" (installGLWatchdog is a no-op on cpu, so it won't re-latch).
+        this.glContextLost = false;
         await this.tf.setBackend("cpu");
         return this.start(onUpdate, assetBase);
       }
@@ -981,6 +1151,9 @@ export class VLATrainerCore {
     this.lossHistory = [];
     this.batches = 0;
     this.convergeStreak = 0;
+    this.nonPhysicalStreak = 0;
+    // glContextLost is intentionally NOT cleared: a lost context stays lost, so
+    // a reset+restart should keep failing fast to reason "context".
     this.probes = [];
   }
 

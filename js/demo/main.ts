@@ -155,10 +155,12 @@ function refreshHud() {
           ? "Trained ✓"
           : trainer.status === "loading"
             ? "Loading…"
-            : // a dead worker chunk can't be retried in-page, only reloaded;
-              // a failed asset load refetches on the next start()
+            : // a dead worker chunk / lost WebGL context can't be retried
+              // in-page, only reloaded; a failed asset load refetches on the
+              // next start()
               trainer.status === "error"
-              ? trainer.errorReason === "worker"
+              ? trainer.errorReason === "worker" ||
+                trainer.errorReason === "context"
                 ? "Reload"
                 : "Retry"
               : "Start Training";
@@ -189,7 +191,10 @@ primaryBtn.onclick = () => {
     if (pauseStart !== null) pausedAccum += performance.now() - pauseStart;
     pauseStart = null;
     trainer.resume();
-  } else if (trainer.status === "error" && trainer.errorReason === "worker") {
+  } else if (
+    trainer.status === "error" &&
+    (trainer.errorReason === "worker" || trainer.errorReason === "context")
+  ) {
     location.reload();
   } else if (trainer.status === "idle" || trainer.status === "error") {
     resetState();
