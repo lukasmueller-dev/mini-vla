@@ -61,6 +61,15 @@ export interface VLATrainerOptions {
       WHY the real path failed. Default off (existing behavior). The host still
       keeps its own outer watchdogs as a last-ditch net. */
   replayFallback?: boolean;
+  /** How long the real path may sit in Loading (Language Warmup) without a
+      first training batch before the replay fallback takes over, in ms.
+      Overrides `CONFIG.replay.watchdogMs` (7500) for THIS trainer only; ignored
+      unless `replayFallback` is on. Lower it to get stalled devices onto the
+      replay sooner — but keep clear headroom above a HEALTHY device's warm-up
+      time, or a merely-slow (cold tfjs, thermal-throttled, low-end GPU) real
+      run gets swapped to the replay before its own first batch lands. Default
+      `CONFIG.replay.watchdogMs`. */
+  replayWatchdogMs?: number;
 }
 
 const BATCH_SIZE = CONFIG.trainer.batchSize;
@@ -93,6 +102,9 @@ export class VLATrainer {
       real worker/core is gone. */
   private replay: ReplayTrainer | null = null;
   private replayFallback: boolean;
+  /** Load-watchdog interval (ms) — the host-tunable override of
+      CONFIG.replay.watchdogMs; see VLATrainerOptions.replayWatchdogMs. */
+  private replayWatchdogMs: number;
   /** Fires if the real path hasn't produced a first training batch in time. */
   private loadWatchdog: ReturnType<typeof setTimeout> | null = null;
   /** True once the real path reached "training" with ≥1 batch — disarms the
@@ -114,6 +126,7 @@ export class VLATrainer {
   constructor(options: VLATrainerOptions = {}) {
     this.assetBase = options.assetBase;
     this.replayFallback = options.replayFallback ?? false;
+    this.replayWatchdogMs = options.replayWatchdogMs ?? CONFIG.replay.watchdogMs;
   }
 
   // Every accessor checks the replay fallback FIRST: once it's live the real
@@ -307,7 +320,7 @@ export class VLATrainer {
     this.loadWatchdog = setTimeout(() => {
       this.loadWatchdog = null;
       if (!this.reachedTraining && !this.replay) this.triggerReplay();
-    }, CONFIG.replay.watchdogMs);
+    }, this.replayWatchdogMs);
   }
 
   private clearLoadWatchdog() {

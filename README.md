@@ -53,7 +53,8 @@ CPU training is ~5 min — far past the demo budget).
 
 Opt in with `new VLATrainer({ replayFallback: true })`. Then if a run never
 reaches its first training batch within `CONFIG.replay.watchdogMs` (the
-dead-on-arrival wedge) **or** it errors out, VLATrainer transparently swaps in a
+dead-on-arrival wedge; override per-trainer with the `replayWatchdogMs` option)
+**or** it errors out, VLATrainer transparently swaps in a
 **replay** behind the same surface — the host UI just keeps rendering, and never
 learns *why* the real path failed. The replay:
 

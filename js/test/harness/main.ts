@@ -77,12 +77,13 @@ const forceReplay = q.get("forceReplay") === "1";
 const replayFallback = q.get("replayFallback") === "1";
 // ?watchdogMs=N shrinks the load watchdog so a spec can force the stall→replay
 // swap deterministically: a tiny value fires before the real path's first batch
-// (which takes seconds), so the fallback engages on a HEALTHY run.
+// (which takes seconds), so the fallback engages on a HEALTHY run. Passed
+// through the host-facing replayWatchdogMs option, so this also exercises it.
 const watchdogMs = Number(q.get("watchdogMs"));
-if (watchdogMs > 0) CONFIG.replay.watchdogMs = watchdogMs;
+const replayWatchdogMs = watchdogMs > 0 ? watchdogMs : undefined;
 const trainer: VLATrainer | ReplayTrainer = forceReplay
   ? new ReplayTrainer()
-  : new VLATrainer({ assetBase, replayFallback });
+  : new VLATrainer({ assetBase, replayFallback, replayWatchdogMs });
 const doStart = forceReplay
   ? () => (trainer as ReplayTrainer).start(onUpdate, assetBase)
   : () => (trainer as VLATrainer).start(onUpdate, cfg);
