@@ -207,6 +207,14 @@ class TrainerConfig:
     # text-only graph with NO images, bound by fixed per-step dispatch overhead,
     # so a larger batch does many more samples per dispatch at almost no cost.
     warmupBatchSize: int = 256
+    # Language warm-up early-stop (see trainer.language_warmup): stop once the
+    # trailing-mean CE loss falls below warmupStopRatio × its initial value, but
+    # never before warmupMinBatches steps. Lowering the floor shortens the
+    # browser Loading phase; its value is chosen by the train.py [budget]
+    # measurement — keep the LOWEST floor that doesn't push main-loop convergence
+    # over the 30s browser budget. Ported to js/ (trainer.core) via /port-to-js.
+    warmupMinBatches: int = 30
+    warmupStopRatio: float = 0.1
     converge: ConvergeConfig = field(default_factory=ConvergeConfig)
     lrSchedule: LRScheduleConfig = field(default_factory=LRScheduleConfig)
 

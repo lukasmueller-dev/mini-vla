@@ -73,6 +73,8 @@ GRASP_FRAC = _T.graspFrac
 GRASP_JITTER_STD = _T.graspJitterStd
 WARMUP_BATCHES = _T.warmupBatches
 WARMUP_BATCH_SIZE = _T.warmupBatchSize
+WARMUP_MIN_BATCHES = _T.warmupMinBatches
+WARMUP_STOP_RATIO = _T.warmupStopRatio
 GRIP_RADIUS = CONFIG.gripper.radius
 GRIP_THRESHOLD = CONFIG.gripper.threshold
 
@@ -373,7 +375,8 @@ class VLATrainer:
         """WARMUP_BATCHES text-only gradient steps on the language twin, run
         before the main loop. Trains ONLY the color head + conv scorer, so the
         attention query starts against a clean language slot. Early-stops once the
-        head's trailing loss falls under 10% of its initial value."""
+        head's trailing-mean loss falls under WARMUP_STOP_RATIO (default 10%) of
+        its initial value, but never before WARMUP_MIN_BATCHES steps."""
         assert self.models is not None
         initial = math.nan
         recent: list[float] = []
@@ -387,7 +390,7 @@ class VLATrainer:
             if len(recent) > 10:
                 recent.pop(0)
             mean = sum(recent) / len(recent)
-            if k >= 30 and mean < 0.1 * initial:
+            if k >= WARMUP_MIN_BATCHES and mean < WARMUP_STOP_RATIO * initial:
                 return
 
     def _action_loss(self, result) -> float:
