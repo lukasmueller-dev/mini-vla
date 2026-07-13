@@ -2,6 +2,8 @@
   "batchSize": 32,
   "cadencePerSec": 10,
   "floorLoss": 0.015,
+  "graspRate": 0.95,
+  "graspEpisodes": 20,
   "weightSpecs": [
     {
       "name": "conv1/0",
@@ -76,14 +78,14 @@
       ]
     },
     {
-      "name": "dense_Dense1/0",
+      "name": "fusion/0",
       "shape": [
         77,
         64
       ]
     },
     {
-      "name": "dense_Dense1/1",
+      "name": "fusion/1",
       "shape": [
         64
       ]
@@ -131,32 +133,32 @@
   "checkpoints": [
     {
       "samples": 32,
-      "loss": 0.86791,
+      "loss": 0.64635,
       "file": "ckpt-0.bin"
     },
     {
       "samples": 1280,
-      "loss": 0.38282,
+      "loss": 0.24482,
       "file": "ckpt-1.bin"
     },
     {
       "samples": 2880,
-      "loss": 0.12044,
+      "loss": 0.13976,
       "file": "ckpt-2.bin"
     },
     {
       "samples": 4800,
-      "loss": 0.08383,
+      "loss": 0.05753,
       "file": "ckpt-3.bin"
     },
     {
       "samples": 7040,
-      "loss": 0.03692,
+      "loss": 0.04843,
       "file": "ckpt-4.bin"
     },
     {
-      "samples": 15776,
-      "loss": 0.01215,
+      "samples": 18880,
+      "loss": 0.01331,
       "file": "ckpt-5.bin"
     }
   ]

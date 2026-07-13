@@ -1,6 +1,6 @@
 {
   "name": "mini-vla",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Standalone in-browser vision-language-action demo: a TensorFlow.js behavior-cloning policy (action + color + gripper + spatial-attention heads) trained live against an analytical-IK expert, with a policy-rollout engine and two canvas renderers.",
   "type": "module",
   "license": "MIT",
