@@ -25,8 +25,9 @@ interface CaptureCkpt {
 }
 
 interface AttemptLog {
-  /** Closed-loop grasp rate of this attempt's converged policy, or −1 if it
-      never converged (asset/context error). */
+  /** Closed-loop grasp rate of this attempt's converged policy, or −1 for a
+      FAILED attempt — never converged, OR the context died during scoring.
+      `converged` is false in both failure cases, so it can't win best-of-N. */
   graspRate: number;
   batches: number;
   converged: boolean;
@@ -112,7 +113,7 @@ async function graspRateOf(
     for (let f = 0; f < MAX_FRAMES; f++) {
       if (f % PRED_EVERY === 0) {
         const p = core.predictTarget(a1, a2, cmd.tokens, layout, carry);
-        if (!p) return 0; // model gone — treat the whole attempt as failed
+        if (!p) return -1; // context died mid-scoring — sentinel, NOT a real 0% grasp
         pred = p.target;
         predGrip = p.grip;
       }
@@ -224,6 +225,15 @@ const statusEl = document.getElementById("status")!;
     // Score the just-converged policy closed-loop, then free it before the next
     // attempt (best.ckpts already holds plain-number weights, so disposal is safe).
     const gr = await graspRateOf(core, GATE_EPISODES);
+    if (gr < 0) {
+      // The context died DURING scoring (predictTarget returned null) — this is
+      // NOT a real 0% grasp, so it must never win best-of-N (else a dead context
+      // ships as a "converged, 0% grasp" policy behind only a console.warn).
+      // Discard the attempt and retry, exactly like the pre-convergence failure.
+      cap.attempts.push({ graspRate: -1, batches: core.batches, converged: false });
+      core.reset();
+      continue;
+    }
     cap.attempts.push({ graspRate: gr, batches: core.batches, converged: true });
     if (!best || gr > best.graspRate)
       best = { specs, ckpts, graspRate: gr, batches: core.batches };
