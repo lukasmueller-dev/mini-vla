@@ -145,7 +145,7 @@ class LRScheduleConfig:
 class ConvergeConfig:
     # Handoff threshold on the trailing-window HUBER action loss. At 0.015,
     # desktop 8c/4b converges by loss at ~415-618 batches, mobile 4c/3b at
-    # ~283-404 (2026-07, 9 seeds, 0 hit the fallback); both over the 30s budget.
+    # ~283-404 (2026-07, 9 seeds, 0 hit the fallback); both inside the 60s budget.
     loss: float = 0.015
     # Trailing window (batches) the convergence mean is taken over.
     window: int = 10

@@ -205,14 +205,15 @@ export const CONFIG = {
     converge: {
       /** Handoff threshold on the trailing-window HUBER action loss.
           Calibration (2026-07, current carry-flag pick-up arch, ~10 gradient
-          batches/s on a mid laptop GPU): at this 0.015 threshold desktop 8c/4b
-          converges BY LOSS at ~415-618 batches (median ~470 ≈ 47s browser) and
-          mobile 4c/3b at ~283-404 (median ~305 ≈ 32s) — measured across 9 seeds,
-          0 hit the fallback, closed-loop grasp 37-96% at handoff. Both currently
-          sit OVER the 30s budget; js/test/perf.spec.ts (`npm run perf`) guards
-          these batch counts against regression, and train.py prints the
-          projected browser time every run. The residual reach error at handoff
-          is a vision-resolution floor, not undertraining. */
+          batches/s on a mid laptop GPU, imgSize 48 ⇒ ~0.056s/batch): at this
+          0.015 threshold desktop 8c/4b converges BY LOSS at ~415-618 batches
+          (≈25-37s browser) and mobile 4c/3b at ~283-404 (≈18-25s) — measured
+          across 9 seeds, 0 hit the fallback, closed-loop grasp 37-96% at handoff.
+          Both sit inside the 60s browser budget (raised from 30s in 2026-07);
+          js/test/perf.spec.ts (`npm run perf`) guards these batch counts against
+          regression, and train.py prints the projected browser time every run.
+          The residual reach error at handoff is a vision-resolution floor, not
+          undertraining. */
       loss: 0.015,
       /** Trailing window (batches) the convergence mean is taken over. Small =
           low detection lag as old high losses roll off; the streak guards
