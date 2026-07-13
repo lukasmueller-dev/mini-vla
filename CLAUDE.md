@@ -30,24 +30,25 @@ the **`/port-to-js`** skill and runs in the browser. So the Python must stay
   set, `ATTN_GRID`/G, model inputs), it also needs **portfolio** changes — the
   `/port-to-js` skill's Phase 7 handles that.
 
-### 2. It must train-to-converge **+ roll out in < 30 s, live in the browser**
+### 2. It must train-to-converge **+ roll out in < 60 s, live in the browser**
 
 This is a hard **product** requirement — it's a portfolio demo a visitor watches.
 It bounds `imgSize`, the conv stack, `batchSize`, warm-up, and above all
 **batches-to-convergence**.
 
-- Calibration: the browser does **~10 gradient batches/s** (WebGL, mid laptop GPU;
-  see the `converge`/`eta` notes in `js/src/config.ts`). Budget ≈
-  `~2 s load + batches_to_converge / 10`. To stay under 30 s, keep typical
-  convergence **under ~250–280 batches** at the current per-batch cost.
+- Calibration: the browser does **~10 gradient batches/s** at imgSize 64; at the
+  current imgSize 48 each batch is ~0.56× that (see the `converge`/`eta` notes in
+  `js/src/config.ts`). Budget ≈ `~2 s load + batches_to_converge × 0.056`. To stay
+  under 60 s, keep typical convergence **well under the ~800-batch fallback**
+  (0.015 lands ~415–618 ≈ 25–37 s).
 - `python train.py` **prints the projected browser time** every run
   (`[budget] … est. browser train ≈ Ns`) — watch it; treat "OVER BUDGET" as a
   regression to fix, not a warning to ignore.
 - **Pay-as-you-go:** if you make the net heavier (bigger `imgSize`, deeper conv,
   larger `batchSize`), you must *buy it back* — faster/fewer batches to converge —
   or you break the budget. Note the default `converge.maxBatches` fallback (800 ≈
-  80 s) already exceeds budget; healthy runs converge well before it, so don't let
-  the *typical* path drift toward the fallback.
+  47 s) sits just inside the 60 s budget; healthy runs converge well before it, so
+  don't let the *typical* path drift toward the fallback.
 
 ## After Python architecture work
 

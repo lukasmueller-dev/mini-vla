@@ -286,7 +286,12 @@ export function buildVLAModel(tf: TF, embedMatrix: Float32Array): VLAModels {
       carryInput,
     ] as tfType.SymbolicTensor[]);
   const dense1 = tf.layers
-    .dense({ units: CONFIG.model.fusionUnits, activation: "relu" })
+    // Explicit name (matches model.py's `name="fusion"`) — WITHOUT it tfjs
+    // auto-names this `dense_Dense<n>` where n is a global per-build counter, so
+    // the replay checkpoint's weightSpec would shift (dense_Dense1 vs _Dense3…)
+    // depending on how many models were built during capture (the grasp gate
+    // builds several), breaking applyPolicyWeights' name check on load.
+    .dense({ units: CONFIG.model.fusionUnits, activation: "relu", name: "fusion" })
     .apply(fused);
   // ACTION as CIRCULAR coordinates, not raw angles: 4 outputs =
   // (cosθ1, sinθ1, cosθ2, sinθ2), the target angles projected onto the unit

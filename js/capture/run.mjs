@@ -33,13 +33,16 @@ page.on("pageerror", (e) => console.error("[pageerror]", e.message));
 console.log("[capture] " + base);
 await page.goto(base, { waitUntil: "load", timeout: 30000 });
 
-const deadline = Date.now() + 10 * 60 * 1000;
+// Grasp-gated capture (main.ts) may retrain several times to land a
+// well-grasping seed, so allow generous wall-clock for the retries.
+const deadline = Date.now() + 30 * 60 * 1000;
 let cap = null;
 while (Date.now() < deadline) {
   const st = await page.evaluate(() => globalThis.__vlaCapture ?? null);
   if (st)
     process.stdout.write(
-      `\r[capture] ${st.status} b=${st.batches} ckpts=${st.checkpoints.length}          `
+      `\r[capture] attempt ${st.attempt} ${st.status} b=${st.batches} ` +
+        `tried=${(st.attempts ?? []).length}          `
     );
   if (st && st.done) {
     cap = st;
@@ -70,6 +73,9 @@ const manifest = {
   batchSize: cap.batchSize,
   cadencePerSec: cap.cadencePerSec,
   floorLoss: cap.floorLoss,
+  // grasp gate telemetry — the shipped policy's closed-loop grasp rate
+  graspRate: cap.graspRate,
+  graspEpisodes: cap.graspEpisodes,
   weightSpecs: cap.weightSpecs,
   checkpoints: [],
 };
@@ -83,3 +89,15 @@ writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify(manifest, null,
 const floats = ckpts[0].weights.length;
 console.log(`[capture] wrote ${ckpts.length} checkpoints (${floats} floats each, ${(floats * 4) / 1024 | 0}KB) + manifest to assets/replay/`);
 console.log(manifest.checkpoints.map((c) => `  ${c.file}: samples=${c.samples} loss=${c.loss}`).join("\n"));
+const attemptSummary = cap.attempts
+  .map((a) => (a.converged ? `${(a.graspRate * 100).toFixed(0)}%` : "×"))
+  .join(", ");
+console.log(
+  `[capture] grasp gate: shipped ${(cap.graspRate * 100).toFixed(0)}% over ` +
+    `${cap.graspEpisodes} eps from ${cap.attempts.length} attempt(s) [${attemptSummary}]`
+);
+if (cap.graspRate < 0.8)
+  console.warn(
+    `[capture] ⚠ shipped grasp ${(cap.graspRate * 100).toFixed(0)}% is low — ` +
+      `re-run gen:replay to try for a better seed`
+  );

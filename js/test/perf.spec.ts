@@ -1,6 +1,6 @@
 // Convergence-PERFORMANCE E2E. Where smoke.spec asserts the pipeline RUNS
 // (loose loss, no grasp floor), this asserts the model still converges within
-// its BATCH budget — the number the < 30 s in-browser product budget is built
+// its BATCH budget — the number the < 60 s in-browser product budget is built
 // on (browser time ≈ 2 s load + batches / 10; see CLAUDE.md and the converge
 // notes in js/src/config.ts).
 //

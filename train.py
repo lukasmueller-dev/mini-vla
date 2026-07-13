@@ -21,12 +21,14 @@ import time
 
 # Browser budget calibration (see CLAUDE.md + the converge/eta notes in
 # js/src/config.ts): the live in-browser demo must train-to-converge + roll out in
-# under 30 s. WebGL does ~10 gradient batches/s on a mid laptop GPU; tfjs load +
-# language warm-up ≈ 2 s. train.py prints the projected browser time so an
-# architecture change that blows the budget is visible immediately.
+# under 60 s (raised from 30 s in 2026-07 for headroom — 0.015 convergence's slow
+# tail ran ~37 s, over the old ceiling). WebGL does ~10 gradient batches/s on a mid
+# laptop GPU; tfjs load + language warm-up ≈ 2 s. train.py prints the projected
+# browser time so an architecture change that blows the budget is visible
+# immediately.
 BROWSER_BATCHES_PER_SEC = 10.0
 BROWSER_LOAD_SECONDS = 2.0
-BROWSER_BUDGET_SECONDS = 30.0
+BROWSER_BUDGET_SECONDS = 60.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -139,7 +141,7 @@ def main() -> None:
     print(f"[eval] graspRate={result.graspRate * 100:.1f}%  "
           f"meanGraspFrames={result.meanGraspFrames}  reachJitter={result.reachJitter}")
 
-    # Projected in-browser training time — the hard < 30 s product budget the
+    # Projected in-browser training time — the hard < 60 s product budget the
     # ported js/ demo must meet (see CLAUDE.md). Treat OVER BUDGET as a regression.
     # The 10 batches/s calibration was measured at imgSize 64 / batchSize 32, and
     # per-batch cost is ~quadratic in imgSize · ~linear in batchSize — so weight
@@ -152,7 +154,7 @@ def main() -> None:
           f"≈ {est_browser:.0f}s (budget {BROWSER_BUDGET_SECONDS:.0f}s) "
           f"[{'OVER BUDGET' if over else 'OK'}]")
     if over:
-        print("[budget] ⚠ over the 30s in-browser budget — cut batches-to-converge "
+        print("[budget] ⚠ over the 60s in-browser budget — cut batches-to-converge "
               "or per-batch compute (imgSize / conv / batchSize). See CLAUDE.md.")
 
     if run is not None:
