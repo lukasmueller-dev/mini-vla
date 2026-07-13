@@ -126,6 +126,19 @@ const MAX_BATCHES = CONFIG.trainer.converge.maxBatches;
 // MAX_BATCHES producing a garbage policy.
 const LOSS_FLOOR = 1e-4;
 const NONPHYSICAL_LIMIT = 8;
+// Warm-up probe (Loading phase, BEFORE "training" is ever shown): a much shorter
+// streak is enough to call a context dead here, because healthy warm-up losses
+// sit far above LOSS_FLOOR — a few consecutive non-physical ones can only be
+// silent-zeros. Bailing at this point (vs the in-loop NONPHYSICAL_LIMIT, which
+// fires ~1 s into a visible run) is what avoids the train→replay flicker.
+const WARMUP_NONPHYSICAL_LIMIT = 3;
+
+/** A physical loss is finite and above LOSS_FLOOR; 0 / non-finite is the
+    silent-zeros signature of a dead GL context (WebKit returns zeros and fires
+    no webglcontextlost event). Shared by the warm-up probe and the in-loop
+    zero-loss guard so both read "dead context" the same way. */
+const isNonPhysical = (loss: number): boolean =>
+  !Number.isFinite(loss) || loss <= LOSS_FLOOR;
 
 // Main-optimizer LR schedule (see config.ts lrSchedule): a linear ramp
 // start→peak over warmupBatches, then inverse-time decay toward floor.
@@ -639,6 +652,7 @@ export class VLATrainerCore {
     // is ~ln(#classes), which the ratio cancels out). WARMUP_BATCHES is only
     // the hard cap.
     let initial = NaN;
+    let nonPhysical = 0;
     const recent: number[] = [];
     for (let k = 0; k < WARMUP_BATCHES; k++) {
       if (!this.running || this.runId !== myRun) return;
@@ -650,9 +664,23 @@ export class VLATrainerCore {
         // free — no extra GPU readback.
         const h = await this.models!.lang.trainOnBatch([xsLang], [yColor]);
         const loss = Array.isArray(h) ? (h[0] as number) : (h as number);
-        if (Number.isNaN(initial)) initial = loss;
-        recent.push(loss);
-        if (recent.length > 10) recent.shift();
+        // Pre-flight context probe: a healthy CE warm-up loss sits far above
+        // LOSS_FLOOR, so a short run of non-physical ones is the silent-zeros
+        // signature of a dead GL context. Latch and bail — start() then falls
+        // to replay while still "Loading", so a dead context never flickers a
+        // second of "training" first. Skip such losses from initial/recent so
+        // one stray zero can't corrupt the early-stop ratio.
+        if (isNonPhysical(loss)) {
+          if (++nonPhysical >= WARMUP_NONPHYSICAL_LIMIT) {
+            this.glContextLost = true;
+            return;
+          }
+        } else {
+          nonPhysical = 0;
+          if (Number.isNaN(initial)) initial = loss;
+          recent.push(loss);
+          if (recent.length > 10) recent.shift();
+        }
       } finally {
         xsLang.dispose();
         yColor.dispose();
@@ -928,6 +956,14 @@ export class VLATrainerCore {
       // against a clean language slot. Runs while the UI still reads "Loading".
       await this.languageWarmup(myRun);
       if (!this.running || this.runId !== myRun) return;
+      // languageWarmup latches glContextLost when its losses came back
+      // non-physical (silent-zeros dead context, no webglcontextlost event).
+      // Fail to the host's replay HERE — still "Loading", before any "training"
+      // batch — instead of letting the dead context surface mid-run and flicker.
+      if (this.glContextLost) {
+        this.failContextLost(onUpdate);
+        return;
+      }
 
       // WebGL compiles each distinct kernel shader (conv2d, pooling, embedding
       // gather, the losses, Adam's update ops) the first time it's used — a
@@ -939,8 +975,11 @@ export class VLATrainerCore {
       const warmupLoss = await this.trainStep();
       if (!this.running || this.runId !== myRun) return;
       // A context lost during the shader warm-up would seed the whole run with
-      // zeros — bail here rather than flicker into "training" first.
-      if (this.glContextLost) {
+      // zeros — bail here rather than flicker into "training" first. Catch BOTH
+      // the event form (glContextLost) and the silent-zeros form (a non-physical
+      // warm-up loss that fired no webglcontextlost event — the iOS signature).
+      if (this.glContextLost || isNonPhysical(warmupLoss)) {
+        this.glContextLost = true; // silent-zeros fires no event — latch it here
         this.failContextLost(onUpdate);
         return;
       }
@@ -976,7 +1015,7 @@ export class VLATrainerCore {
         // and, after NONPHYSICAL_LIMIT of them, stop to reason "context" instead
         // of looping to MAX_BATCHES on garbage. Distinct from the catch block's
         // cpu fallback, which handles THROWN gradient errors.
-        const physical = Number.isFinite(loss) && loss > LOSS_FLOOR;
+        const physical = !isNonPhysical(loss);
         if (physical) {
           this.nonPhysicalStreak = 0;
         } else if (++this.nonPhysicalStreak >= NONPHYSICAL_LIMIT) {
