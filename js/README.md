@@ -32,7 +32,7 @@ npm run typecheck
 
 `npm run perf` (js/test/perf.spec.ts) trains each profile to full convergence
 and asserts it stays within the batch budget in js/test/perf-budgets.json — a
-regression guard on the number the <30s in-browser budget is built on. It needs
+regression guard on the number the <60s in-browser budget is built on. It needs
 a **real GPU** (a full run is ~500 software-WebGL batches ≈ 20 min otherwise),
 so it's separate from `test:e2e` and out of CI; edit the JSON to retune a budget
 or add a task.

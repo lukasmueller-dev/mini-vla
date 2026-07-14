@@ -177,7 +177,7 @@ class VLATrainer:
     def __init__(self) -> None:
         self.models: Optional[VLAModels] = None
         self.status = "idle"
-        self.loss = math.nan  # latest Huber action loss
+        self.loss = math.nan  # latest MSE action loss
         self.smooth_loss = math.nan  # trailing-window mean (convergence signal)
         self.initial_loss = math.nan
         self.loss_history: list[float] = []
@@ -394,7 +394,7 @@ class VLATrainer:
                 return
 
     def _action_loss(self, result) -> float:
-        """Extract the unweighted Huber action loss from a train_on_batch dict —
+        """Extract the unweighted MSE action loss from a train_on_batch dict —
         the convergence signal (matches trainer.core's loss index 1)."""
         if isinstance(result, dict):
             for key in ("action_loss", "output_1_loss"):
@@ -409,7 +409,7 @@ class VLATrainer:
 
     def train_step(self) -> float:
         """One gradient step on a freshly synthesized micro-batch. Returns the
-        batch's Huber action loss."""
+        batch's MSE action loss."""
         assert self.models is not None
         b = self.synth_batch(BATCH_SIZE)
         result = self.models.model.train_on_batch(

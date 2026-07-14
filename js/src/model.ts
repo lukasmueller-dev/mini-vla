@@ -10,7 +10,7 @@
 // (x, y) image coordinate under the map — plus its attention-weighted feature
 // vector (block size / local shape). A small dense head then regresses the
 // target joint angles as CIRCULAR coords (cosθ, sinθ per joint; recovered with
-// atan2 at readout — see trainer.core's anglesFromCircular) so a wrong-side
+// atan2 at readout — see infer.ts's anglesFromCircular) so a wrong-side
 // pick is a BOUNDED error, not an outlier tail.
 //
 // Why this shape: the previous architecture (FiLM-modulated CNN → flatten →
@@ -107,7 +107,7 @@ export interface VLAModels {
   /** Main policy (the one that trains): [vision, tokens, carry] →
       [action circular coords (cosθ1,sinθ1,cosθ2,sinθ2), color softmax,
       attention map [G*G], gripper (1)]. Angles are recovered from the 4 action
-      outputs with atan2 in trainer.core's inferTarget. The map is a trained
+      outputs with atan2 in infer.ts's inferTarget. The map is a trained
       OUTPUT, not just a readout — see mapLossWeight in config.ts for why the
       action loss alone can't train the attention. color reads the pooled
       language slot — a pure text decoder. gripper is the learned "close now"
@@ -401,7 +401,7 @@ export function buildVLAModel(tf: TF, embedMatrix: Float32Array): VLAModels {
     );
   // gripper: plain binary cross-entropy on the sigmoid head, scaled down like
   // the other aux heads so it nudges (not dominates) the shared trunk. The
-  // action Huber stays output 0 so trainStep's convergence read (loss index 1)
+  // action MSE stays output 0 so trainStep's convergence read (loss index 1)
   // is unchanged.
   const weightedGripLoss = (yTrue: tfType.Tensor, yPred: tfType.Tensor) =>
     tf.tidy(() =>

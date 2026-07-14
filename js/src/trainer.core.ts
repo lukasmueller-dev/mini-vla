@@ -28,7 +28,7 @@
 // arm need to end up," not also implicitly infer the current pose and
 // subtract. The Rollout arm computes its own delta from the predicted target
 // against its actual known current pose (see Hero.tsx's drawArm) and steps
-// toward it; the plotted curve is the genuine action loss (Huber regression
+// toward it; the plotted curve is the genuine action loss (MSE regression
 // to that absolute target), and the Rollout is driven purely by
 // model.predict on its own live silhouette view.
 //
@@ -110,7 +110,7 @@ const WARMUP_BATCH_SIZE = CONFIG.trainer.warmupBatchSize;
 // Convergence: the mean action loss over a short trailing WINDOW of batches
 // stays under CONVERGE_LOSS for CONVERGE_STREAK consecutive batches (after
 // MIN_BATCHES warmup) → training ends and unlocks "try it" mode. MAX_BATCHES is
-// the fixed-budget fallback. Threshold is on the HUBER action loss (model.ts).
+// the fixed-budget fallback. Threshold is on the MSE action loss (model.ts).
 export const CONVERGE_LOSS = CONFIG.trainer.converge.loss;
 const CONVERGE_WINDOW = CONFIG.trainer.converge.window;
 const CONVERGE_STREAK = CONFIG.trainer.converge.streak;
@@ -118,7 +118,7 @@ const MIN_BATCHES = CONFIG.trainer.converge.minBatches;
 const MAX_BATCHES = CONFIG.trainer.converge.maxBatches;
 
 // Zero-loss / context-loss guard (see the training loop + installGLWatchdog).
-// A real Huber action loss for this task floors ~0.012 and is never exactly 0,
+// A real MSE action loss for this task floors ~0.012 and is never exactly 0,
 // so a loss at/below LOSS_FLOOR (or non-finite) is NON-PHYSICAL — the signature
 // of a silently-dead WebGL context (WebKit returns zeros instead of throwing).
 // Such a loss must never count toward convergence, and NONPHYSICAL_LIMIT of
@@ -293,7 +293,7 @@ export class VLATrainerCore {
   status: TrainerStatus = "idle";
   /** Set whenever status is "error"; null otherwise. See TrainerError. */
   errorReason: TrainerError | null = null;
-  /** Real action loss (Huber) from the latest trainOnBatch (NaN before the first). */
+  /** Real action loss (MSE) from the latest trainOnBatch (NaN before the first). */
   loss = NaN;
   /** Mean action loss over the last CONVERGE_WINDOW batches — the low-lag
       signal convergence is judged on (NaN before the first batch). */
@@ -330,7 +330,7 @@ export class VLATrainerCore {
   private running = false;
   private paused = false;
   private convergeStreak = 0;
-  /** Consecutive NON-PHYSICAL batch losses (0 / non-finite). A real Huber
+  /** Consecutive NON-PHYSICAL batch losses (0 / non-finite). A real MSE
       action loss floors ~0.012 and is never 0, so a run of these means the GL
       context is silently dead (WebKit returns zeros, doesn't throw) — see the
       training loop's zero-loss guard. Reset per run. */
@@ -694,7 +694,7 @@ export class VLATrainerCore {
 
   /**
    * One gradient step on a freshly synthesized micro-batch.
-   * Returns the batch's action loss (Huber).
+   * Returns the batch's action loss (MSE).
    */
   private async trainStep(): Promise<number> {
     const tf = this.tf!;
@@ -720,7 +720,7 @@ export class VLATrainerCore {
         [yAction, yColor, yMapPick, yGrip]
       );
       // multi-output: [total, action, color, map, grip] — index 1 stays the
-      // Huber ACTION loss the convergence logic watches
+      // MSE ACTION loss the convergence logic watches
       return Array.isArray(h) ? (h[1] as number) : (h as number);
     } finally {
       xsVision.dispose();
@@ -1009,7 +1009,7 @@ export class VLATrainerCore {
           return;
         }
 
-        // Zero-loss guard: a real Huber action loss is finite and > LOSS_FLOOR;
+        // Zero-loss guard: a real MSE action loss is finite and > LOSS_FLOOR;
         // a 0 / non-finite loss is the silent-zeros signature of a dead GL
         // context (WebKit doesn't throw). Count consecutive non-physical batches
         // and, after NONPHYSICAL_LIMIT of them, stop to reason "context" instead
@@ -1143,7 +1143,6 @@ export class VLATrainerCore {
     this.frozenModels = null;
   }
 
-  /** Preprocess an imgSize (48×48) RGBA thumb into the model's inverted input tensor. */
   /**
    * Policy inference on the LIVE (still-training) model: render the given
    * state (pose + block layout + carried block) to the model's-eye view, run
