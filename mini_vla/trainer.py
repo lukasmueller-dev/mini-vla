@@ -173,6 +173,17 @@ def _angle_err(pred: float, label: float) -> float:
     return d
 
 
+def _apply_word_dropout(lang: np.ndarray, idx: int, tokens) -> None:
+    """Copy `tokens` into row `idx` of `lang`, randomly replacing non-label,
+    non-PAD tokens with <unk> (word-dropout — so the encoder learns to handle
+    unknown words). Preserves the exact per-token RNG draw order."""
+    for s in range(MAX_SEQ_LEN):
+        tok = tokens[s]
+        if tok != PAD and tok not in LABEL_TOKEN_IDS and random.random() < WORD_DROPOUT:
+            tok = UNK
+        lang[idx, s] = tok
+
+
 class VLATrainer:
     def __init__(self) -> None:
         self.models: Optional[VLAModels] = None
@@ -220,20 +231,22 @@ class VLATrainer:
                 continue
             ys_m[base + i * g + j] += w
 
+    def _to_uv(self, x: float, y: float) -> tuple[float, float]:
+        """Map a workspace (x, y) point to silhouette [0,1] (u, v) coords."""
+        u = 0.5 + (x - 0.5) * CONFIG.render.sceneScale
+        v = CONFIG.render.floorY - y * CONFIG.render.sceneScale
+        return u, v
+
     def _block_uv(self, x: float, size: float, rest: float = 0.0) -> tuple[float, float]:
         """A resting block's visual center in silhouette [0,1] (u, v) coords."""
-        u = 0.5 + (x - 0.5) * CONFIG.render.sceneScale
         y_center = rest + (size * CONFIG.render.silBlockScale) / 2
-        v = CONFIG.render.floorY - y_center * CONFIG.render.sceneScale
-        return u, v
+        return self._to_uv(x, y_center)
 
     def _effector_uv(self, a1: float, a2: float) -> tuple[float, float]:
         """The effector position in silhouette [0,1] coords — where a CARRIED
         block renders (the attention anchor for the carry phase)."""
         e = fk(a1, a2)
-        u = 0.5 + (e["ex"] - 0.5) * CONFIG.render.sceneScale
-        v = CONFIG.render.floorY - e["ey"] * CONFIG.render.sceneScale
-        return u, v
+        return self._to_uv(e["ex"], e["ey"])
 
     def synth_batch(self, n: int, force_carry: Optional[bool] = None) -> Batch:
         """Synthesizes n//2 scenes and pairs each with its MIRROR twin (n odd
@@ -314,11 +327,7 @@ class VLATrainer:
 
             # word-dropout: tokens that don't carry label information occasionally
             # become <unk> so the encoder learns to handle unknown words.
-            for s in range(MAX_SEQ_LEN):
-                tok = sentence.tokens[s]
-                if tok != PAD and tok not in LABEL_TOKEN_IDS and random.random() < WORD_DROPOUT:
-                    tok = UNK
-                lang[idx, s] = tok
+            _apply_word_dropout(lang, idx, sentence.tokens)
 
         def mirror_into(src: int, dst: int) -> None:
             """Fill `dst` as the exact horizontal mirror of already-filled `src`
@@ -357,11 +366,7 @@ class VLATrainer:
             layout = random_layout()
             sentence = sample_command(layout)
             ys_c[i, sentence.color] = 1.0
-            for s in range(MAX_SEQ_LEN):
-                tok = sentence.tokens[s]
-                if tok != PAD and tok not in LABEL_TOKEN_IDS and random.random() < WORD_DROPOUT:
-                    tok = UNK
-                lang[i, s] = tok
+            _apply_word_dropout(lang, i, sentence.tokens)
         return lang, ys_c
 
     # ── training ─────────────────────────────────────────────────────────────
