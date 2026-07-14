@@ -214,10 +214,7 @@ def print_dry_run(grid: dict, seeds: list[int], args) -> None:
     print(f"[param-sweep] rough wall ≈ {est / 60:.0f} min (sequential)\n")
     cur_group = None
     for label, ov in configs:
-        group = label
-        if label != "baseline":
-            # find which knob this belongs to (label IS the knob for our grid)
-            group = label
+        group = label  # label IS the knob for our grid
         if group != cur_group:
             print(f"── {group} ──" if label != "baseline" else "")
             cur_group = group
