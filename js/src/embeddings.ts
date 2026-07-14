@@ -4,7 +4,8 @@
 // "Loading" phase (~1MB — the tfjs bundle it rides along with is similar).
 //
 // The dequantized matrix seeds the model's FROZEN text_embedding layer and
-// backs trainer.tokenContributions() reads (CPU-side — no GPU sync needed for
+// backs infer.ts's tokenAttention() reads (surfaced as the core's
+// attentionWeights(); CPU-side — no GPU sync needed for
 // a frozen table). Loading also registers the full 20k-word list with
 // examples.ts's tokenizer, widening it beyond the bundled CORE_VOCAB grammar
 // words — that's what lets user-typed near-synonyms ("gold", "violet") hit a

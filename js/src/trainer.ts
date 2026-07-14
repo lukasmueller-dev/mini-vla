@@ -142,7 +142,7 @@ export class VLATrainer {
     if (this.replay) return this.replay.errorReason;
     return this.core ? this.core.errorReason : this.m.errorReason;
   }
-  /** Real action loss (Huber) from the latest batch (NaN before the first). */
+  /** Real action loss (MSE) from the latest batch (NaN before the first). */
   get loss() {
     if (this.replay) return this.replay.loss;
     return this.core ? this.core.loss : this.m.loss;

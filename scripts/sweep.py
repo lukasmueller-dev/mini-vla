@@ -118,7 +118,7 @@ def main() -> None:
     print(f"grasp   mean {summary['meanGraspRate'] * 100:.0f}%  "
           f"worst-seed {summary['worstGraspRate'] * 100:.0f}%")
     print(f"budget  median est. browser {summary['medianEstBrowserSeconds']:.0f}s "
-          f"— {summary['overBudgetCount']}/{len(seeds)} seeds over 30s")
+          f"— {summary['overBudgetCount']}/{len(seeds)} seeds over 60s")
     print(f"[sweep] total wall {time.time() - t0:.0f}s → {out_dir}/")
 
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))

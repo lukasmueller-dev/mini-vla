@@ -203,7 +203,7 @@ export const CONFIG = {
     // `loss` for `streak` consecutive batches (after `minBatches` warmup) →
     // training ends, "try it" mode unlocks. `maxBatches` is the fixed fallback.
     converge: {
-      /** Handoff threshold on the trailing-window HUBER action loss.
+      /** Handoff threshold on the trailing-window MSE action loss.
           Calibration (2026-07, current carry-flag pick-up arch, ~10 gradient
           batches/s on a mid laptop GPU, imgSize 48 ⇒ ~0.056s/batch): at this
           0.015 threshold desktop 8c/4b converges BY LOSS at ~415-618 batches

@@ -140,7 +140,8 @@ feature map. Vision and language meet through an explicit attention readout:
 
 **Fusion + heads.** `(x̂, ŷ)` + the attended feature vector + the language
 vector + `carry_flag` concatenate into one small dense fusion layer, which
-feeds four heads: the target joint angles (Huber regression), a
+feeds four heads: the target joint angles (MSE regression on circular
+coords), a
 color-classification head (auxiliary, off the language vector alone), the
 attention map itself (auxiliary supervision, categorical cross-entropy against
 the commanded block's known grid cell — without it the action loss alone
@@ -208,7 +209,7 @@ npm run typecheck
 
 `npm run perf` (`js/test/perf.spec.ts`) trains each profile to full convergence
 and asserts it stays within the batch budget in `js/test/perf-budgets.json` — a
-regression guard on the number the < 30 s in-browser budget is built on. It needs
+regression guard on the number the < 60 s in-browser budget is built on. It needs
 a real GPU and runs off-CI (a full run is ~500 software-WebGL batches otherwise);
 tuning a budget or adding a task is a JSON edit.
 
@@ -230,6 +231,6 @@ the internal file layout.
 4. **Regenerate assets** only if the grammar/vocab/quantization changed:
    `npm run gen:embeddings` → rewrites `assets/` and, in lockstep,
    `js/src/vocab.gen.ts` + `mini_vla/vocab_gen.py`.
-5. **Commit + tag** a new version here (e.g. `v0.2.0`).
+5. **Commit + tag** a new version here (e.g. `v0.7.0`).
 6. **Go live:** in the portfolio repo bump the `mini-vla` dependency to the new
    tag, reinstall, redeploy. That single step ships it.
