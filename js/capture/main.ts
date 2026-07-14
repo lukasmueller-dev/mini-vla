@@ -14,7 +14,7 @@
 
 import { CONFIG } from "../src/config";
 import { DEFAULT_RUN_CONFIG, setRunConfig } from "../src/run-config";
-import type { VLATrainerCore } from "../src/trainer.core";
+import { scoreGraspRate } from "../eval/closed-loop";
 
 interface CaptureCkpt {
   samples: number;
@@ -73,77 +73,6 @@ const MILESTONE_BATCHES = [1, 40, 90, 150, 220];
 const GATE_EPISODES = 20;
 const EARLY_ACCEPT = 0.9;
 const MAX_ATTEMPTS = 8;
-
-/** Closed-loop rollout grasp rate for a converged core — a faithful mirror of
-    js/eval/main.ts closedLoopEval and the live RolloutEngine (src/rollout.ts):
-    proportional step toward the latest prediction, re-predict every few frames,
-    learned gripper grasp on the rising edge while the effector is over the
-    commanded block, via THE shared effectorOverBlock predicate. Kept local:
-    capture is dev-only tooling, and this scores exactly the weights that ship. */
-async function graspRateOf(
-  core: VLATrainerCore,
-  episodes: number
-): Promise<number> {
-  const { randomLayout, sampleCommand, blockOfColor } = await import(
-    "../src/examples"
-  );
-  const { REST, effectorOverBlock } = await import("../src/geometry");
-  const R = CONFIG.rollout;
-  const GRIP_RADIUS = CONFIG.gripper.radius;
-  const GRIP_THRESHOLD = CONFIG.gripper.threshold;
-  const PRED_EVERY = 6; // frames between re-predictions ≈ the engine's predictMs
-  const MAX_FRAMES = 300; // bound the worst-case predict count (SwiftShader)
-
-  let grasps = 0;
-  for (let e = 0; e < episodes; e++) {
-    await new Promise((r) => setTimeout(r, 0)); // yield so status polling isn't starved
-    const layout = randomLayout();
-    const cmd = sampleCommand(layout);
-    const target = blockOfColor(layout, cmd.color);
-
-    let a1 = REST[0];
-    let a2 = REST[1];
-    let carry: number | null = null;
-    let pred: [number, number] = [a1, a2];
-    let near = 0;
-    let settle = 0;
-    let predGrip = 0;
-    let sawOpen = false;
-
-    for (let f = 0; f < MAX_FRAMES; f++) {
-      if (f % PRED_EVERY === 0) {
-        const p = core.predictTarget(a1, a2, cmd.tokens, layout, carry);
-        if (!p) return -1; // context died mid-scoring — sentinel, NOT a real 0% grasp
-        pred = p.target;
-        predGrip = p.grip;
-      }
-      a1 += (pred[0] - a1) * R.stepGain;
-      a2 += (pred[1] - a2) * R.stepGain;
-
-      if (carry === null) {
-        // learned grasp gate — SAME predicate as training + the RolloutEngine:
-        // effector fully over the commanded block AND the predicted gripper
-        // closing on the rising edge (a prior open frame required)
-        const closing = predGrip >= GRIP_THRESHOLD;
-        const over = effectorOverBlock(a1, a2, target, GRIP_RADIUS);
-        if (over && closing && sawOpen) {
-          if (++near >= R.nearFrames) {
-            carry = cmd.color;
-            grasps++;
-          }
-        } else near = 0;
-        if (!closing) sawOpen = true;
-      } else if (
-        Math.abs(pred[0] - a1) < R.settleEps &&
-        Math.abs(pred[1] - a2) < R.settleEps
-      ) {
-        // carry settled — the arm holds the block aloft; episode done
-        if (++settle >= 4) break;
-      } else settle = 0;
-    }
-  }
-  return grasps / episodes;
-}
 
 const statusEl = document.getElementById("status")!;
 
@@ -222,9 +151,13 @@ const statusEl = document.getElementById("status")!;
       continue;
     }
 
-    // Score the just-converged policy closed-loop, then free it before the next
-    // attempt (best.ckpts already holds plain-number weights, so disposal is safe).
-    const gr = await graspRateOf(core, GATE_EPISODES);
+    // Score the just-converged policy closed-loop via THE shared rollout
+    // integrator (js/eval/closed-loop.ts — same loop the eval sweep and, in
+    // spirit, the replay run), then free it before the next attempt (best.ckpts
+    // already holds plain-number weights, so disposal is safe). A dead context
+    // scores as null → the −1 sentinel below.
+    const r = await scoreGraspRate(core, GATE_EPISODES);
+    const gr = r ? r.graspRate : -1;
     if (gr < 0) {
       // The context died DURING scoring (predictTarget returned null) — this is
       // NOT a real 0% grasp, so it must never win best-of-N (else a dead context
