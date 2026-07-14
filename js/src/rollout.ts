@@ -282,12 +282,8 @@ export class RolloutEngine {
             break;
           }
         }
-        ep.near =
-          over >= 0 && closing && ep.sawOpen && over === ep.nearColor
-            ? ep.near + 1
-            : over >= 0 && closing && ep.sawOpen
-              ? 1
-              : 0;
+        const armed = over >= 0 && closing && ep.sawOpen;
+        ep.near = armed ? (over === ep.nearColor ? ep.near + 1 : 1) : 0;
         ep.nearColor = over;
         // record an open frame AFTER the gate read, so the first close frame
         // still counts as a rising edge against a prior open one
