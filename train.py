@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 
 # Browser budget calibration (see CLAUDE.md + the converge/eta notes in
@@ -173,6 +174,13 @@ def main() -> None:
     print(f"[train] saved weights → {args.out}")
     if run is not None:
         run.finish()
+
+    # CLAUDE.md: "treat OVER BUDGET as a regression to fix, not a warning to
+    # ignore" — a non-zero exit makes that enforceable (e.g. by a future CI
+    # step) instead of relying on someone reading stdout. Checked last so the
+    # weights/wandb run are still saved even on an over-budget run.
+    if over:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
