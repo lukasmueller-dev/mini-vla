@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 // Gated release: the ONLY sanctioned way to mint a version tag. Refuses on a
-// dirty tree or a package.json version that disagrees with the tag, runs
-// typecheck + the full browser×device E2E suite (playwright.config.ts), and
-// only then tags. The portfolio consumes this repo as a git-ref npm dependency
-// (github:…#<tag>), so an un-gated hand-typed `git tag` is exactly how a broken
-// artifact would go live.
+// dirty tree, a branch other than main, a local main that hasn't reached
+// origin (i.e. hasn't gone through a reviewed PR merge), or a package.json
+// version that disagrees with the tag; runs typecheck + the full
+// browser×device E2E suite (playwright.config.ts); and only then tags. The
+// portfolio consumes this repo as a git-ref npm dependency (github:…#<tag>),
+// so an un-gated hand-typed `git tag` is exactly how a broken artifact would
+// go live.
 //
 //   npm run release -- v0.4.0
 //
-// Deliberately left open: the budget/perf gates (batches-to-converge,
-// ms/batch ceilings) slot in here once the repo's conflicting timing
-// calibrations are reconciled — add them between the E2E suite and the tag.
+// The budget/perf gate (batches-to-converge, ms/batch ceilings) is still not
+// wired in here — perf.spec.ts needs a real GPU (playwright.perf.config.ts),
+// so it can't run inline in this script the way the GPU-less E2E suite does.
+// The timing-calibration reconciliation this comment used to wait on landed
+// in bae50ef (2026-07-13); check-python's train.py runs are the CI-side
+// substitute (Python-only — see js/test/perf.spec.ts for the browser gate).
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
@@ -28,6 +33,28 @@ const run = (cmd) => {
 const dirty = execSync("git status --porcelain").toString().trim();
 if (dirty) {
   console.error("[release] working tree is dirty — commit or stash first:\n" + dirty);
+  process.exit(1);
+}
+
+// Provenance gate: without this, any branch can pass every other check below
+// (clean tree, version match, typecheck, E2E) and mint a tag whose commit
+// never went through a reviewed PR merge into main — the checks here verify
+// the CONTENT is release-worthy, not that it took the sanctioned PATH there.
+const branch = execSync("git rev-parse --abbrev-ref HEAD").toString().trim();
+if (branch !== "main") {
+  console.error(
+    `[release] must release from 'main' (currently on '${branch}') — merge via a reviewed PR first.`
+  );
+  process.exit(1);
+}
+execSync("git fetch origin main --quiet");
+const localHead = execSync("git rev-parse HEAD").toString().trim();
+const remoteMain = execSync("git rev-parse origin/main").toString().trim();
+if (localHead !== remoteMain) {
+  console.error(
+    "[release] local main is not the same commit as origin/main — pull (if behind) " +
+      "or push and merge via PR (if ahead) before releasing."
+  );
   process.exit(1);
 }
 
