@@ -213,7 +213,7 @@ class TrainerConfig:
     # never before warmupMinBatches steps. Lowering the floor shortens the
     # browser Loading phase; its value is chosen by the train.py [budget]
     # measurement — keep the LOWEST floor that doesn't push main-loop convergence
-    # over the 30s browser budget. Ported to js/ (trainer.core) via /port-to-js.
+    # over the 60s browser budget. Ported to js/ (trainer.core) via /port-to-js.
     warmupMinBatches: int = 30
     warmupStopRatio: float = 0.1
     converge: ConvergeConfig = field(default_factory=ConvergeConfig)

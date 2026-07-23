@@ -201,6 +201,14 @@ export const CONFIG = {
         wall-clock for equal learning. Cheap in memory (int32 tokens + small
         one-hot labels, no pixel tensors). */
     warmupBatchSize: 256,
+    /** Language warm-up early-stop (see trainer.core's languageWarmup): stop
+        once the trailing-mean CE loss falls below warmupStopRatio × its
+        initial value, but never before warmupMinBatches steps. Mirrors
+        mini_vla/config.py's TrainerConfig.warmupMinBatches/warmupStopRatio —
+        keep the LOWEST floor that doesn't push main-loop convergence over
+        the 60s browser budget. */
+    warmupMinBatches: 30,
+    warmupStopRatio: 0.1,
     // Convergence: mean action loss over the last `window` batches stays under
     // `loss` for `streak` consecutive batches (after `minBatches` warmup) →
     // training ends, "try it" mode unlocks. `maxBatches` is the fixed fallback.
