@@ -85,10 +85,15 @@ jobs:
           retention-days: 14
 
   claude-review:
+    # Author-association gate is defense-in-depth: anthropics/claude-code-action
+    # itself defaults to only acting for write-access users, but without this
+    # check here the job (checkout + pull-requests:write + id-token:write) would
+    # still spin up for a comment from ANY commenter, write-access or not.
     if: >
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '@claude')
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
