@@ -60,6 +60,38 @@ the pass bar (8/8 colors decode correctly).
 
 None known yet.
 
+## Root-cause evidence (from CI artifacts)
+
+Pulled `playwright-report` from run
+https://github.com/lukasmueller-dev/portfolio-site/actions/runs/30037663156
+and read the four failures' `error-context.md` snapshots. Each shows the HUD
+batch count at "Ready":
+
+| Browser | Batches at Ready | Decoded (wrong) |
+|---|---|---|
+| desktop | 269 | black |
+| desktop retry | 273 | black |
+| mobile | 243 | yellow |
+| mobile retry | 239 | yellow |
+
+All four cluster at 239-273 batches — well below BOTH calibrations on
+record: `mini_vla/config.py`'s `ConvergeConfig` comment (desktop ~415-618,
+mobile ~283-404, by-loss, "9 seeds, 0 hit the fallback") and
+`hero-full.spec.ts`'s own comment ("converges around 370-560 batches" on
+this exact headless-SwiftShader setup). Consistent, not noisy — action-loss
+convergence is firing well before the color head has had the batch count it
+was calibrated against. This is the actual mechanism behind the wrong
+decodes, on top of the structural gap (color loss never gates "Ready").
+
+Note: this repo has a recurring pattern of stale calibration comments (see
+`73cecfd`, `24fd44e`) — the "370-560" figure may simply never have been
+re-measured after the Huber→circular-MSE action-loss switch, meaning
+~250-batch convergence could be the current *actual* behavior, not a fresh
+regression. Either way: **size the color-convergence threshold/streak
+against a ~250-batch action-convergence point**, not the ~400-600 range the
+old comments assume — re-measure with `python train.py` / a fresh
+`perf-nightly`-style run rather than trusting the existing comments.
+
 ## Gotchas (unpromoted)
 
 - `MAX_BATCHES` (800) is a hard fallback that calls "Ready" regardless of
