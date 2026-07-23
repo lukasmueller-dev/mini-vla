@@ -34,6 +34,32 @@ def vocab_words() -> Optional[list[str]]:
     return _words
 
 
+def _assert_asset_shape(raw: np.ndarray, words: list[str], base: Path) -> None:
+    """Fail loudly when assets/ doesn't describe the same table vocab_gen.py's
+    compiled-in constants claim — mirrors js/src/embeddings.ts's
+    assertAssetShape. Without this, a stale/mismatched-but-similarly-sized
+    embeddings-50d.bin + vocab.txt pair reshapes and dequantizes without error
+    (numpy only raises if the total element count disagrees, not if a
+    per-word/per-dim split is wrong), silently seeding the frozen
+    text_embedding layer with garbage."""
+    regen = "regenerate with `npm run gen:embeddings`"
+    if len(EMBED_SCALES) != EMBED_DIM:
+        raise ValueError(
+            f"mini-vla: corrupt vocab_gen.py — EMBED_SCALES has {len(EMBED_SCALES)} "
+            f"entries, expected EMBED_DIM={EMBED_DIM}"
+        )
+    if len(words) != VOCAB_SIZE - 2:
+        raise ValueError(
+            f"mini-vla: {base}/vocab.txt has {len(words)} words, expected "
+            f"{VOCAB_SIZE - 2} (VOCAB_SIZE={VOCAB_SIZE} less <pad> and <unk>) — {regen}"
+        )
+    if raw.size != len(words) * EMBED_DIM:
+        raise ValueError(
+            f"mini-vla: {base}/embeddings-50d.bin is {raw.size} bytes, expected "
+            f"{len(words) * EMBED_DIM} ({len(words)} words × EMBED_DIM={EMBED_DIM}) — {regen}"
+        )
+
+
 def load(assets_dir: Optional[Path] = None) -> np.ndarray:
     """Read + dequantize the embeddings (idempotent). Returns the frozen matrix
     and registers the full vocab with the tokenizer as a side effect."""
@@ -44,6 +70,7 @@ def load(assets_dir: Optional[Path] = None) -> np.ndarray:
     base = Path(assets_dir) if assets_dir is not None else _ASSETS
     raw = np.fromfile(base / "embeddings-50d.bin", dtype=np.int8)
     words = [w for w in (base / "vocab.txt").read_text().split("\n") if w]
+    _assert_asset_shape(raw, words, base)
 
     n = len(words)
     rows = raw.reshape(n, EMBED_DIM).astype(np.float32) * np.asarray(
