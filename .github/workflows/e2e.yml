@@ -49,6 +49,17 @@ jobs:
           python-version: "3.10"
       - run: pip install -e ".[dev]"
       - run: pytest
+      # train.py now exits non-zero on OVER BUDGET (see CLAUDE.md: "treat
+      # OVER BUDGET as a regression to fix, not a warning to ignore"), so a
+      # real (uncapped) run of each shipped preset here makes a
+      # batches-to-converge regression fail CI instead of only being visible
+      # in someone's local stdout. CPU-only convergence is fast (~15-20s per
+      # preset measured locally) — nowhere near this job's timeout. This
+      # covers the Python-side calibration only; js/ can still drift from it
+      # independently (see js/test/perf.spec.ts, GPU-only and off-CI, for
+      # the browser-side gate).
+      - run: python train.py --preset desktop --eval-episodes 4
+      - run: python train.py --preset mobile --eval-episodes 4
 
   test:
     if: github.event_name != 'issue_comment'
@@ -85,10 +96,15 @@ jobs:
           retention-days: 14
 
   claude-review:
+    # Author-association gate is defense-in-depth: anthropics/claude-code-action
+    # itself defaults to only acting for write-access users, but without this
+    # check here the job (checkout + pull-requests:write + id-token:write) would
+    # still spin up for a comment from ANY commenter, write-access or not.
     if: >
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '@claude')
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -136,9 +152,24 @@ jobs:
     needs: [e2e]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      # `scripts/release.mjs` is the sanctioned way to cut a tag (it checks this
+      # same invariant before tagging), but git has no server-side way to force
+      # every tag push through it — so a raw `git tag && git push` can reach this
+      # job directly. This is the concrete harm that bypass enables: hosts derive
+      # their asset path from package.json's version (see README's assetBase
+      # section), so a version/tag mismatch here would dispatch a release whose
+      # assets live at the WRONG versioned path.
+      - name: Verify tag matches package.json version
+        run: |
+          version="$(jq -r .version package.json)"
+          if [ "v$version" != "${{ github.ref_name }}" ]; then
+            echo "::error::package.json version (v$version) does not match pushed tag (${{ github.ref_name }}) — refusing to dispatch. Use \`npm run release -- <tag>\` instead of a raw tag push." >&2
+            exit 1
+          fi
       - uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PORTFOLIO_DISPATCH_TOKEN }}
           repository: lukasmueller-dev/portfolio-site
           event-type: mini-vla-release
-          client-payload: '{"tag": "${{ github.ref_name }}"}'
+          client-payload: '{"tag": ${{ toJson(github.ref_name) }}}'
