@@ -106,6 +106,8 @@ const GRIP_RADIUS = CONFIG.gripper.radius;
 const GRIP_THRESHOLD = CONFIG.gripper.threshold;
 const WARMUP_BATCHES = CONFIG.trainer.warmupBatches;
 const WARMUP_BATCH_SIZE = CONFIG.trainer.warmupBatchSize;
+const WARMUP_MIN_BATCHES = CONFIG.trainer.warmupMinBatches;
+const WARMUP_STOP_RATIO = CONFIG.trainer.warmupStopRatio;
 
 // Convergence: the mean action loss over a short trailing WINDOW of batches
 // stays under CONVERGE_LOSS for CONVERGE_STREAK consecutive batches (after
@@ -688,7 +690,7 @@ export class VLATrainerCore {
       // eligible to stop after a small floor of steps, once the trailing mean
       // has dropped to <10% of the initial loss
       const mean = recent.reduce((a, c) => a + c, 0) / recent.length;
-      if (k >= 30 && mean < 0.1 * initial) return;
+      if (k >= WARMUP_MIN_BATCHES && mean < WARMUP_STOP_RATIO * initial) return;
     }
   }
 

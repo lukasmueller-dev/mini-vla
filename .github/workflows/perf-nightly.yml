@@ -1,0 +1,61 @@
+# Convergence-PERFORMANCE regression check (js/test/perf.spec.ts) under
+# GPU-less software-GL (SwiftShader), on a schedule.
+#
+# WHY THIS EXISTS: perf.spec.ts asserts batches-to-converge stays within the
+# budgets in js/test/perf-budgets.json — the number the <60s in-browser
+# product budget (CLAUDE.md) is built on. It is deliberately excluded from the
+# required `e2e` gate (playwright.config.ts's testIgnore) because a full
+# convergence run under CI's GPU-less software WebGL takes ~20 min/project,
+# and otherwise only runs opt-in against a real GPU (`npm run perf`, see
+# playwright.perf.config.ts). That means a JS-only port regression that
+# inflates batches-to-converge — one that never touches mini_vla/, so
+# check-python's calibration in e2e.yml can't see it either — currently has NO
+# CI coverage at all. This workflow closes part of that gap: same spec, same
+# budgets, run headless on a cadence instead of every PR.
+#
+# KNOWN LIMITATION: still a proxy, not a substitute for the real thing.
+# Batches-to-converge is engine-stable (perf-budgets.json's own comment), so
+# the pass/fail signal here is trustworthy. But wall-clock under SwiftShader
+# is NOT representative of a real visitor's device — only playwright.perf.
+# config.ts's real-GPU run (`npm run perf`) can speak to that. So this stays
+# informational: NOT a required check, NOT wired into `e2e`'s `needs:` (branch
+# protection only requires `e2e` — this workflow is intentionally invisible to
+# it), and a failure here should prompt an investigation, not block a merge
+# by itself.
+#
+# CADENCE: weekly, not nightly. A convergence run here costs ~20-30 min of CI
+# time for a signal that (per the above) only changes when the JS model/task
+# architecture changes — infrequent in practice — so nightly would mostly burn
+# minutes re-confirming the same result. workflow_dispatch is also enabled for
+# an on-demand spot-check (e.g. right after a port-to-js change lands).
+name: perf-nightly
+
+on:
+  schedule:
+    # Mondays 06:00 UTC. Cron minute/hour picked to land outside typical
+    # US/EU working hours; day picked so a Monday-morning regression is caught
+    # promptly rather than sitting all week.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    # Generous over the ~20 min estimate in e2e.yml — software-GL convergence
+    # wall-clock is inherently noisy (see this suite's own retry rationale).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --config playwright.perf-ci.config.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-perf-nightly
+          path: playwright-report/
+          retention-days: 14
