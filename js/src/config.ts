@@ -46,9 +46,11 @@ export const CONFIG = {
         seeds) and 0.003 measurably slower without being more reliable. */
     learningRate: 0.005,
     /** Weight of the auxiliary color-classification loss vs. the action loss.
-        0.4 was the most collapse-resistant setting in the sweep (0 side-binding
-        collapses across 7 seeds vs 1/7 at 0.2); 0.2 peaked slightly higher on
-        lucky seeds but is riskier. */
+        Raised from an earlier 0.4 — the most collapse-resistant setting in the
+        2026-07 sweep (0 side-binding collapses across 7 seeds vs 1/7 at 0.2;
+        0.2 peaked slightly higher on lucky seeds but was riskier) — to the
+        current 0.6; the rationale for that later bump isn't recorded, so a
+        future retune should capture why 0.6 replaced 0.4. */
     colorLossWeight: 0.6,
     /** Weight of the auxiliary attention-map loss (see model.ts): cross-
         entropy between the spatial attention map and the commanded block's
