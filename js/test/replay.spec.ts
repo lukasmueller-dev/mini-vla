@@ -7,17 +7,20 @@
 //   2. VLATrainer transparently SWAPS to it when the real path stalls, carrying
 //      through to a converged, grasping run the host reads identically.
 //
-// Engine-independent (the replay forces the CPU backend — no GL), so one
-// project suffices; gated to chromium-desktop to keep the suite fast.
+// The CPU backend itself is engine-independent, but replayFallback exists
+// SPECIFICALLY for iOS/WebKit's dead-GL-context failure — so this also runs
+// on webkit-iphone (real WebKit engine semantics), not just chromium-desktop,
+// rather than assuming the swap behaves identically under both JS engines.
 import { test, expect } from "@playwright/test";
 import { TRAIN_MS, WEDGE_MS } from "./budget";
 
 const HARNESS = "http://localhost:5199/";
+const REPRESENTATIVES = ["chromium-desktop", "webkit-iphone"];
 
 test.beforeEach(async ({}, testInfo) => {
   test.skip(
-    testInfo.project.name !== "chromium-desktop",
-    "replay path is engine-independent (CPU backend)"
+    !REPRESENTATIVES.includes(testInfo.project.name),
+    "CPU-backend replay path verified on one desktop + the iOS project it exists for"
   );
 });
 
