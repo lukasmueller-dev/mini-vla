@@ -49,6 +49,17 @@ jobs:
           python-version: "3.10"
       - run: pip install -e ".[dev]"
       - run: pytest
+      # train.py now exits non-zero on OVER BUDGET (see CLAUDE.md: "treat
+      # OVER BUDGET as a regression to fix, not a warning to ignore"), so a
+      # real (uncapped) run of each shipped preset here makes a
+      # batches-to-converge regression fail CI instead of only being visible
+      # in someone's local stdout. CPU-only convergence is fast (~15-20s per
+      # preset measured locally) — nowhere near this job's timeout. This
+      # covers the Python-side calibration only; js/ can still drift from it
+      # independently (see js/test/perf.spec.ts, GPU-only and off-CI, for
+      # the browser-side gate).
+      - run: python train.py --preset desktop --eval-episodes 4
+      - run: python train.py --preset mobile --eval-episodes 4
 
   test:
     if: github.event_name != 'issue_comment'
