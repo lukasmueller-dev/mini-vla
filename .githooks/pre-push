@@ -11,14 +11,25 @@
 #   <local ref> <local sha> <remote ref> <remote sha>
 set -eu
 
+remote="$1"
+
 # main and master are always protected; additionally protect this repo's real
 # default branch, resolved at push time from the remote's HEAD. That is what
 # lets the hook guard a repo whose default is 'trunk' or 'develop' without
 # anyone editing this file — a hardcoded 'main' silently protected nothing
-# there. If origin/HEAD is not set (no remote yet), the fallback pair stands.
+# there. Prefer a LIVE lookup against the remote being pushed to: a cached
+# refs/remotes/<remote>/HEAD is only refreshed by `git remote set-head` or a
+# fresh clone, NOT by fetch/pull — so after the real default branch is
+# renamed on the host, a contributor's stale local cache would silently
+# under-protect the new name. Fall back to that local cache only if the live
+# lookup itself fails (e.g. offline — though a push needs the remote anyway).
+# If neither resolves (no remote yet), the hardcoded fallback pair stands.
 protected_refs="refs/heads/main refs/heads/master"
-default_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-default_branch="${default_branch#origin/}"
+default_branch="$(git ls-remote --symref "$remote" HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:blank:]]HEAD$#\1#p')"
+if [ -z "$default_branch" ]; then
+  default_branch="$(git symbolic-ref --short "refs/remotes/$remote/HEAD" 2>/dev/null || true)"
+  default_branch="${default_branch#"$remote"/}"
+fi
 if [ -n "$default_branch" ]; then
   protected_refs="refs/heads/$default_branch $protected_refs"
 fi
