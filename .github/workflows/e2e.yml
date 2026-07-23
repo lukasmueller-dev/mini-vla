@@ -141,9 +141,24 @@ jobs:
     needs: [e2e]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      # `scripts/release.mjs` is the sanctioned way to cut a tag (it checks this
+      # same invariant before tagging), but git has no server-side way to force
+      # every tag push through it — so a raw `git tag && git push` can reach this
+      # job directly. This is the concrete harm that bypass enables: hosts derive
+      # their asset path from package.json's version (see README's assetBase
+      # section), so a version/tag mismatch here would dispatch a release whose
+      # assets live at the WRONG versioned path.
+      - name: Verify tag matches package.json version
+        run: |
+          version="$(jq -r .version package.json)"
+          if [ "v$version" != "${{ github.ref_name }}" ]; then
+            echo "::error::package.json version (v$version) does not match pushed tag (${{ github.ref_name }}) — refusing to dispatch. Use \`npm run release -- <tag>\` instead of a raw tag push." >&2
+            exit 1
+          fi
       - uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.PORTFOLIO_DISPATCH_TOKEN }}
           repository: lukasmueller-dev/portfolio-site
           event-type: mini-vla-release
-          client-payload: '{"tag": "${{ github.ref_name }}"}'
+          client-payload: '{"tag": ${{ toJson(github.ref_name) }}}'
