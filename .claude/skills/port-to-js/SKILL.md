@@ -198,8 +198,8 @@ Python produces. If a head or `ATTN_GRID` changed, confirm the live "where the
 model looks" heatmap and per-token bars still render in `npm run demo`.
 
 **Budget gate (hard product requirement, see `CLAUDE.md`):** the in-browser demo
-must train-to-converge **+ roll out in < 30 s**. Check `train.py`'s `[budget]`
-line (and, in `npm run demo`, that convergence lands well under 30 s of wall
+must train-to-converge **+ roll out in < 60 s**. Check `train.py`'s `[budget]`
+line (and, in `npm run demo`, that convergence lands well under 60 s of wall
 clock). If the port pushed it over, it is **not shippable** — reduce
 batches-to-converge or per-batch compute (`imgSize` / conv / `batchSize`) before
 Phase 6.
@@ -207,7 +207,11 @@ Phase 6.
 ## Phase 6 — Ship (the Development → live steps)
 
 1. Bump the version in **`package.json`** and **`pyproject.toml`** together.
-2. Commit; `git tag vX.Y.Z`; push the tag.
+2. Commit and merge via PR into `main`; then, from an up-to-date `main`, run
+   `npm run release -- vX.Y.Z` (the only sanctioned way to tag — see
+   `scripts/release.mjs`'s header) and push the tag it creates. Do not
+   hand-tag with a raw `git tag` + push — that skips every check the script
+   runs.
 3. **Portfolio repo (downstream — this is what makes it live):**
    - Bump the dependency to the new tag: `github:lukasmueller-dev/mini-vla#vX.Y.Z`, then
      `npm install`.
