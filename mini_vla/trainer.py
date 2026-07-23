@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
@@ -59,7 +59,6 @@ from .task import (
     random_layout,
     sample_command,
 )
-from .vocab_gen import EMBED_DIM
 
 # All tuning knobs live in config.py; aliased to locals so the loop reads the same.
 _T = CONFIG.trainer
@@ -527,9 +526,9 @@ class VLATrainer:
         assert self.models is not None
         rgb = render_silhouette(a1, a2, layout, carry)
         v = to_model_input(rgb)[np.newaxis, ...]
-        l = np.asarray([tokens], dtype=np.int32)
+        lang = np.asarray([tokens], dtype=np.int32)
         c = np.asarray([[1.0 if carry is not None else 0.0]], dtype=np.float32)
-        action, pick, grip = self.models.viz([v, l, c], training=False)
+        action, pick, grip = self.models.viz([v, lang, c], training=False)
         action = action.numpy().reshape(-1)  # [cosθ1, sinθ1, cosθ2, sinθ2]
         t1, t2 = _angles_from_circular(*action)
         attn = pick.numpy().reshape(-1)
@@ -560,9 +559,9 @@ class VLATrainer:
             return None
         assert self.models is not None
         v = np.zeros((1, IMG_SIZE, IMG_SIZE, 3), dtype=np.float32)
-        l = np.asarray([tokens], dtype=np.int32)
+        lang = np.asarray([tokens], dtype=np.int32)
         c = np.zeros((1, 1), dtype=np.float32)
-        _action, color, _map, _grip = self.models.model([v, l, c], training=False)
+        _action, color, _map, _grip = self.models.model([v, lang, c], training=False)
         color = color.numpy().reshape(-1)
         idx = int(np.argmax(color))
         return {"color": idx, "colorProb": float(color[idx])}

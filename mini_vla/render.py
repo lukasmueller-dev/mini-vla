@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw
 
 from .config import CONFIG
 from .geometry import BASE, BLOCK, L1, L2
-from .task import COLORS, BlockPos, Layout
+from .task import COLORS, Layout
 
 # Blocks render a touch larger in the model's-eye view (see silBlockScale).
 _SIL_BLOCK_SCALE = CONFIG.render.silBlockScale
