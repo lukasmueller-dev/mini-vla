@@ -55,3 +55,13 @@ It bounds `imgSize`, the conv stack, `batchSize`, warm-up, and above all
 Run **`/port-to-js`** to re-express the change in `js/src/`, verify
 (`npm run typecheck` / `demo` / `eval`), and get the go-live + portfolio hand-off.
 Do not hand-edit `js/src/*` as the primary path — it's regenerated from Python.
+
+## Repo conventions
+
+A pre-push hook blocks direct pushes to `main` (in addition to the server-side
+ruleset). It lives in `.githooks/`, which git does not enable by default on a
+fresh clone — run this once per clone:
+
+```
+git config core.hooksPath .githooks
+```

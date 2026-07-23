@@ -35,6 +35,21 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
 
+  # Covers the mini_vla/ Python source of truth (js/ is the ported artifact,
+  # already covered by typecheck+test above). No ruff config exists yet, so
+  # this is pytest only — add a lint step if that changes.
+  check-python:
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
   test:
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
@@ -94,15 +109,17 @@ jobs:
   # shard fails rather than being skipped along with it.
   e2e:
     if: always() && github.event_name != 'issue_comment'
-    needs: [typecheck, test]
+    needs: [typecheck, test, check-python]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all shards passed
         run: |
-          echo "typecheck: ${{ needs.typecheck.result }}"
-          echo "test:      ${{ needs.test.result }}"
+          echo "typecheck:    ${{ needs.typecheck.result }}"
+          echo "test:         ${{ needs.test.result }}"
+          echo "check-python: ${{ needs.check-python.result }}"
           [ "${{ needs.typecheck.result }}" = "success" ] \
-            && [ "${{ needs.test.result }}" = "success" ]
+            && [ "${{ needs.test.result }}" = "success" ] \
+            && [ "${{ needs.check-python.result }}" = "success" ]
 
   # A green v* tag IS a mini-vla release. Tell portfolio-site to bump its pin so
   # the live demo tracks this version near-instantly (vs. an hourly poll).
