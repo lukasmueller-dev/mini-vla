@@ -153,13 +153,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so `merge-base --is-ancestor` below can actually trace
+          # the tag's commit back to origin/main — a shallow (depth-1) checkout
+          # of just the tag commit has no parent history to walk.
+          fetch-depth: 0
       # `scripts/release.mjs` is the sanctioned way to cut a tag (it checks this
       # same invariant before tagging), but git has no server-side way to force
       # every tag push through it — so a raw `git tag && git push` can reach this
-      # job directly. This is the concrete harm that bypass enables: hosts derive
-      # their asset path from package.json's version (see README's assetBase
-      # section), so a version/tag mismatch here would dispatch a release whose
-      # assets live at the WRONG versioned path.
+      # job directly. This job re-checks BOTH invariants release.mjs enforces
+      # locally, since neither survives a hand-typed tag push on its own:
+      #   1. provenance — the tag's commit actually reached main via a reviewed
+      #      PR merge, not a raw push from an unreviewed branch;
+      #   2. content — package.json's version agrees with the tag, since hosts
+      #      derive their asset path from it (see README's assetBase section),
+      #      so a mismatch here would dispatch a release whose assets live at
+      #      the WRONG versioned path.
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::tag ${{ github.ref_name }} (commit ${{ github.sha }}) is not reachable from main — refusing to dispatch. Use \`npm run release -- <tag>\` instead of a raw tag push." >&2
+            exit 1
+          fi
       - name: Verify tag matches package.json version
         run: |
           version="$(jq -r .version package.json)"
