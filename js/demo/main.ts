@@ -7,7 +7,7 @@
 
 import { VLATrainer } from "../src/trainer";
 import { RolloutEngine, type RolloutFrame } from "../src/rollout";
-import { paintScene, sceneMap, type ScenePalette } from "../src/scene";
+import { DEFAULT_PALETTE, paintScene, sceneMap } from "../src/scene";
 import { DEMO_PERIOD_MS, demoPose, makeDemoPlan, type DemoPlan } from "../src/demo";
 import {
   DEFAULT_LAYOUT,
@@ -18,15 +18,7 @@ import {
   type Sentence,
 } from "../src/examples";
 const ACCENT = "#e12d1a";
-const PALETTE: ScenePalette = {
-  floor: "#e6e6e6",
-  pedestal: "#2b2b2b",
-  link: "#8a8a8a",
-  joint: "#fff",
-  effectorOpen: "#fff",
-  effectorOpenEdge: "#6f6f6f",
-  effectorClosed: "#6f6f6f",
-};
+const PALETTE = DEFAULT_PALETTE;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const demoCanvas = $<HTMLCanvasElement>("demo");
