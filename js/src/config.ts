@@ -33,7 +33,7 @@ export const CONFIG = {
     /** Square input resolution fed to the CNN. Lowered 64→48 in the 2026-07
         sweep: per-batch vision compute is ~quadratic in this (48 is ~0.56× the
         cost of 64), and that per-batch saving is what pulls the est. browser
-        train time UNDER the 30s budget. The old "32 was too blurry to resolve
+        train time UNDER the 60s budget. The old "32 was too blurry to resolve
         within-band position" floor no longer binds — sin/cos action coords +
         the spatial attention readout now carry the position signal, so grasp
         precision held at 48 (5-seed grasp actually rose vs 64). The CNN and
