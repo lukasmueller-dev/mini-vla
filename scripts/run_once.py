@@ -103,6 +103,7 @@ def main() -> None:
         "batches": trainer.batches,
         "hitFallback": trainer.batches >= max_batches,  # stopped by budget, not by loss
         "smoothLoss": trainer.smooth_loss,
+        "smoothColorLoss": trainer.smooth_color_loss,
         # final held-out probe (FINAL_PROBE_N per bucket)
         "reachLoss": final.buckets.get("reach"),
         "carryLoss": final.buckets.get("carry"),
@@ -119,6 +120,7 @@ def main() -> None:
         "trainWallSeconds": train_seconds,
         # curves, for later plotting / convergence-criterion tuning
         "lossHistory": trainer.loss_history,
+        "colorLossHistory": trainer.color_loss_history,
         "probes": [dataclasses.asdict(p) for p in trainer.probes],
     }
 

@@ -148,6 +148,25 @@ class ConvergeConfig:
     # desktop 8c/4b converges by loss at ~415-618 batches, mobile 4c/3b at
     # ~283-404 (2026-07, 9 seeds, 0 hit the fallback); both inside the 60s budget.
     loss: float = 0.015
+    # Handoff threshold on the trailing-window color/language CE loss (the
+    # auxiliary head trained by model.colorLossWeight). WHY IT EXISTS:
+    # `loss` alone only watches the action head — portfolio-site's
+    # hero-full.spec.ts (VLA_FULL=1) caught "Ready" firing at ~240-270
+    # batches with the color head still undertrained, decoding the wrong
+    # color 4/4 times. Gated through the SAME trailing window/streak as
+    # `loss` (see trainer.fit) so both heads must be simultaneously settled.
+    # Calibrated 2026-07 (6 Python/CPU seeds + 1 real-browser SwiftShader run
+    # via `npm run eval`, desktop 8c/4b): in every HEALTHY run the color head
+    # settles far earlier and lower than the action head — smoothed color CE
+    # drops under 0.02 by batch ~110-230, and sits at 0.003-0.007 by the time
+    # action loss itself converges (batch 439-648 Python, 465 browser). 0.02
+    # sits comfortably above that healthy plateau (never adds batches to a
+    # healthy run) but well below where an undertrained/collapsed color head
+    # would sit (~0.05-0.1, the CE level seen just past warm-up) — so it's a
+    # real backstop for the pathological case the action-loss-only gate
+    # missed, not just a rubber stamp. Re-measure with `python train.py` /
+    # `npm run eval` if either head's loss shape changes.
+    colorLoss: float = 0.02
     # Trailing window (batches) the convergence mean is taken over.
     window: int = 10
     # Consecutive in-threshold batches required before declaring converged.

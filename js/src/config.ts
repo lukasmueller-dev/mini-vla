@@ -225,6 +225,27 @@ export const CONFIG = {
           The residual reach error at handoff is a vision-resolution floor, not
           undertraining. */
       loss: 0.015,
+      /** Handoff threshold on the trailing-window color/language CE loss (the
+          auxiliary head trained by model.colorLossWeight). WHY IT EXISTS:
+          `loss` alone only watches the action head — hero-full.spec.ts
+          (VLA_FULL=1) caught "Ready" firing at ~240-270 batches with the
+          color head still undertrained, decoding the wrong color 4/4 times
+          across desktop/mobile/webkit-mobile + retries. Gated through the
+          SAME trailing window/streak as `loss` (see trainer.core's main
+          loop) so both heads must be simultaneously settled. Calibrated
+          2026-07 (6 Python/CPU seeds + 1 real-browser SwiftShader run via
+          `npm run eval`, desktop 8c/4b): in every HEALTHY run the color head
+          settles far earlier and lower than the action head — smoothed
+          color CE drops under 0.02 by batch ~110-230, and sits at
+          0.003-0.007 by the time action loss itself converges (batch
+          439-648 Python, 465 browser). 0.02 sits comfortably above that
+          healthy plateau (never adds batches to a healthy run) but well
+          below where an undertrained/collapsed color head would sit
+          (~0.05-0.1, the CE level seen just past warm-up) — a real backstop
+          for the pathological case, not a rubber stamp. Mirrors
+          mini_vla/config.py's ConvergeConfig.colorLoss — keep the two in
+          sync; re-measure if either head's loss shape changes. */
+      colorLoss: 0.02,
       /** Trailing window (batches) the convergence mean is taken over. Small =
           low detection lag as old high losses roll off; the streak guards
           against a lucky dip. */

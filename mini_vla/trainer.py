@@ -78,6 +78,7 @@ GRIP_RADIUS = CONFIG.gripper.radius
 GRIP_THRESHOLD = CONFIG.gripper.threshold
 
 CONVERGE_LOSS = _T.converge.loss
+CONVERGE_COLOR_LOSS = _T.converge.colorLoss
 CONVERGE_WINDOW = _T.converge.window
 CONVERGE_STREAK = _T.converge.streak
 MIN_BATCHES = _T.converge.minBatches
@@ -191,6 +192,9 @@ class VLATrainer:
         self.smooth_loss = math.nan  # trailing-window mean (convergence signal)
         self.initial_loss = math.nan
         self.loss_history: list[float] = []
+        self.color_loss = math.nan  # latest CE color/language loss
+        self.smooth_color_loss = math.nan  # trailing-window mean (convergence signal)
+        self.color_loss_history: list[float] = []
         self.batches = 0
         self.probes: list[ProbeRow] = []
         # Probe cadence in batches; 0 (default) = off. Sweeps set it (~25).
@@ -399,7 +403,7 @@ class VLATrainer:
 
     def _action_loss(self, result) -> float:
         """Extract the unweighted MSE action loss from a train_on_batch dict —
-        the convergence signal (matches trainer.core's loss index 1)."""
+        one of the two convergence signals (matches trainer.core's loss index 1)."""
         if isinstance(result, dict):
             for key in ("action_loss", "output_1_loss"):
                 if key in result:
@@ -411,9 +415,23 @@ class VLATrainer:
         # list form: [total, action, color, map, grip]
         return float(result[1])
 
-    def train_step(self) -> float:
-        """One gradient step on a freshly synthesized micro-batch. Returns the
-        batch's MSE action loss."""
+    def _color_loss(self, result) -> float:
+        """Extract the unweighted CE color/language loss from a train_on_batch
+        dict — the other convergence signal (matches trainer.core's loss index 2).
+        See ConvergeConfig.colorLoss for why this must also gate "Ready"."""
+        if isinstance(result, dict):
+            for key in ("color_loss", "output_2_loss"):
+                if key in result:
+                    return float(result[key])
+            for k, v in result.items():
+                if k.startswith("color"):
+                    return float(v)
+        # list form: [total, action, color, map, grip]
+        return float(result[2])
+
+    def train_step(self) -> tuple[float, float]:
+        """One gradient step on a freshly synthesized micro-batch. Returns
+        (action_loss, color_loss) — the pair the convergence gate watches."""
         assert self.models is not None
         b = self.synth_batch(BATCH_SIZE)
         result = self.models.model.train_on_batch(
@@ -421,7 +439,7 @@ class VLATrainer:
             [b.ysA, b.ysC, b.ysMPick, b.ysG],
             return_dict=True,
         )
-        return self._action_loss(result)
+        return self._action_loss(result), self._color_loss(result)
 
     @staticmethod
     def _huber(e: float) -> float:
@@ -483,14 +501,18 @@ class VLATrainer:
         converge_streak = 0
         while True:
             self.models.model.optimizer.learning_rate = _scheduled_lr(self.batches)
-            loss = self.train_step()
+            loss, color_loss = self.train_step()
             self.loss = loss
+            self.color_loss = color_loss
             if math.isnan(self.initial_loss):
                 self.initial_loss = loss
             self.loss_history.append(loss)
+            self.color_loss_history.append(color_loss)
             self.batches += 1
             window = self.loss_history[-CONVERGE_WINDOW:]
             self.smooth_loss = sum(window) / len(window)
+            color_window = self.color_loss_history[-CONVERGE_WINDOW:]
+            self.smooth_color_loss = sum(color_window) / len(color_window)
 
             if self.probe_every_n > 0 and self.batches % self.probe_every_n == 0:
                 self.run_probe()
@@ -498,7 +520,12 @@ class VLATrainer:
             if on_update is not None:
                 on_update(self)
 
-            if self.batches >= MIN_BATCHES and self.smooth_loss < CONVERGE_LOSS:
+            # both heads must be simultaneously settled — see ConvergeConfig.colorLoss.
+            if (
+                self.batches >= MIN_BATCHES
+                and self.smooth_loss < CONVERGE_LOSS
+                and self.smooth_color_loss < CONVERGE_COLOR_LOSS
+            ):
                 converge_streak += 1
             else:
                 converge_streak = 0

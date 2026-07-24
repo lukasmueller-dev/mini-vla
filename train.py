@@ -111,7 +111,13 @@ def main() -> None:
 
     def on_update(tr: VLATrainer) -> None:
         if run is not None:
-            log = {"batch": tr.batches, "loss": tr.loss, "smooth_loss": tr.smooth_loss}
+            log = {
+                "batch": tr.batches,
+                "loss": tr.loss,
+                "smooth_loss": tr.smooth_loss,
+                "color_loss": tr.color_loss,
+                "smooth_color_loss": tr.smooth_color_loss,
+            }
             if tr.probes and tr.probes[-1].batch == tr.batches:
                 pr = tr.probes[-1]
                 log.update(
@@ -128,7 +134,7 @@ def main() -> None:
             last_print[0] = now
             print(
                 f"\r[train] {tr.status} b={tr.batches} loss={tr.loss:.4f} "
-                f"smooth={tr.smooth_loss:.4f}",
+                f"smooth={tr.smooth_loss:.4f} color_smooth={tr.smooth_color_loss:.4f}",
                 end="",
                 flush=True,
             )
