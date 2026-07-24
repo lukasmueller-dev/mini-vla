@@ -220,9 +220,11 @@ export type Layout = BlockPos[];
  *
  * Two blocks sharing one ~0.20-wide band would occlude each other (a block is
  * up to 0.16 wide, boosted ×silBlockScale in the model's-eye view). placeSide
- * reject-samples same-side positions/sizes until their silhouettes clear by
- * minBlockGap; if no attempt fits within the attempt budget (both drawn large),
- * it falls back to a SINGLE block rather than force an occluding overlap — so
+ * CONSTRUCTS a non-overlapping pair (draw both sizes, require their center
+ * separation to clear both silhouettes plus minBlockGap, then place each
+ * block within the room that clearance leaves); only a pair whose required
+ * clearance exceeds the whole band (both drawn large) can't share it, and
+ * falls back to a SINGLE block rather than force an occluding overlap — so
  * two-per-side naturally biases toward smaller blocks, and huge pairs simply
  * don't happen. The unfilled color slot is just left unused (colors stay
  * unique among the blocks actually placed).
