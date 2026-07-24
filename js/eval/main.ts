@@ -28,6 +28,8 @@ declare global {
       loss: number;
       smoothLoss: number;
       lossHistory: number[];
+      colorLoss: number;
+      smoothColorLoss: number;
       probes: unknown[];
       rollout?: RolloutEval | null;
       done: boolean;
@@ -92,12 +94,15 @@ if (set)
       loss: core.loss,
       smoothLoss: core.smoothLoss,
       lossHistory: core.lossHistory,
+      colorLoss: core.colorLoss,
+      smoothColorLoss: core.smoothColorLoss,
       probes: core.probes,
       rollout: window.__vlaLab?.rollout ?? null,
       done,
     };
     setLine(
-      `eval: ${core.status} b=${core.batches} smooth=${core.smoothLoss.toFixed(4)}`
+      `eval: ${core.status} b=${core.batches} smooth=${core.smoothLoss.toFixed(4)} ` +
+        `colorSmooth=${core.smoothColorLoss.toFixed(4)}`
     );
     if (maxBatches && core.batches >= maxBatches && core.status === "training")
       core.pause(); // soft cap — keeps the trained weights inspectable

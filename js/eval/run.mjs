@@ -56,7 +56,7 @@ while (Date.now() < deadline) {
   const st = await page.evaluate(() => globalThis.__vlaLab ?? null);
   if (st)
     process.stdout.write(
-      `\r[eval] ${st.status} b=${st.batches} smooth=${(st.smoothLoss || 0).toFixed(4)} rollout=${st.rollout ? JSON.stringify(st.rollout) : "…"}          `
+      `\r[eval] ${st.status} b=${st.batches} smooth=${(st.smoothLoss || 0).toFixed(4)} colorSmooth=${(st.smoothColorLoss || 0).toFixed(4)} rollout=${st.rollout ? JSON.stringify(st.rollout) : "…"}          `
     );
   if (st && st.done && st.rollout) {
     result = st;
@@ -80,6 +80,7 @@ console.log(
         status: result.status,
         batches: result.batches,
         smoothLoss: result.smoothLoss,
+        smoothColorLoss: result.smoothColorLoss,
         probes: result.probes?.length ?? 0,
         rollout: result.rollout,
       },

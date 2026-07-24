@@ -114,6 +114,10 @@ const WARMUP_STOP_RATIO = CONFIG.trainer.warmupStopRatio;
 // MIN_BATCHES warmup) → training ends and unlocks "try it" mode. MAX_BATCHES is
 // the fixed-budget fallback. Threshold is on the MSE action loss (model.ts).
 export const CONVERGE_LOSS = CONFIG.trainer.converge.loss;
+// Gates "Ready" alongside CONVERGE_LOSS on the color/language head — see
+// config.ts's converge.colorLoss for why (an action-loss-only gate let
+// "Ready" fire with the color head still undertrained).
+export const CONVERGE_COLOR_LOSS = CONFIG.trainer.converge.colorLoss;
 const CONVERGE_WINDOW = CONFIG.trainer.converge.window;
 const CONVERGE_STREAK = CONFIG.trainer.converge.streak;
 const MIN_BATCHES = CONFIG.trainer.converge.minBatches;
@@ -303,6 +307,13 @@ export class VLATrainerCore {
   /** First recorded loss — the normalization anchor for the UI. */
   initialLoss = NaN;
   lossHistory: number[] = [];
+  /** Real color/language loss (CE) from the latest trainOnBatch (NaN before
+      the first). See CONVERGE_COLOR_LOSS. */
+  colorLoss = NaN;
+  /** Mean color loss over the last CONVERGE_WINDOW batches — the other
+      low-lag convergence signal (NaN before the first batch). */
+  smoothColorLoss = NaN;
+  colorLossHistory: number[] = [];
   batches = 0;
   /** Probe cadence in batches; 0 (default) = off, so the demo path pays
       nothing. The vla-lab harness sets it (~25) for sweep runs. */
@@ -696,9 +707,10 @@ export class VLATrainerCore {
 
   /**
    * One gradient step on a freshly synthesized micro-batch.
-   * Returns the batch's action loss (MSE).
+   * Returns [actionLoss (MSE), colorLoss (CE)] — the pair the convergence
+   * gate watches (CONVERGE_LOSS / CONVERGE_COLOR_LOSS).
    */
-  private async trainStep(): Promise<number> {
+  private async trainStep(): Promise<[number, number]> {
     const tf = this.tf!;
     // Override Adam's LR from the schedule BEFORE this step (mirrors trainer.py
     // fit()). this.batches is 0 on the shader-warmup step, 1..N in the loop, so
@@ -721,9 +733,11 @@ export class VLATrainerCore {
         [xsVision, xsLang, xsCarry],
         [yAction, yColor, yMapPick, yGrip]
       );
-      // multi-output: [total, action, color, map, grip] — index 1 stays the
-      // MSE ACTION loss the convergence logic watches
-      return Array.isArray(h) ? (h[1] as number) : (h as number);
+      // multi-output: [total, action, color, map, grip] — index 1 is the MSE
+      // ACTION loss, index 2 the CE COLOR loss; both feed the convergence gate.
+      return Array.isArray(h)
+        ? [h[1] as number, h[2] as number]
+        : [h as number, h as number];
     } finally {
       xsVision.dispose();
       xsLang.dispose();
@@ -947,6 +961,9 @@ export class VLATrainerCore {
     this.smoothLoss = NaN;
     this.initialLoss = NaN;
     this.lossHistory = [];
+    this.colorLoss = NaN;
+    this.smoothColorLoss = NaN;
+    this.colorLossHistory = [];
     this.batches = 0;
     this.convergeStreak = 0;
     this.nonPhysicalStreak = 0;
@@ -974,7 +991,7 @@ export class VLATrainerCore {
       // still reads "Loading" (a state the user already expects to wait
       // through), so training visibly moves at full speed from the first
       // rendered batch.
-      const warmupLoss = await this.trainStep();
+      const [warmupLoss, warmupColorLoss] = await this.trainStep();
       if (!this.running || this.runId !== myRun) return;
       // A context lost during the shader warm-up would seed the whole run with
       // zeros — bail here rather than flicker into "training" first. Catch BOTH
@@ -988,7 +1005,10 @@ export class VLATrainerCore {
       this.loss = warmupLoss;
       this.smoothLoss = warmupLoss;
       this.initialLoss = warmupLoss;
+      this.colorLoss = warmupColorLoss;
+      this.smoothColorLoss = warmupColorLoss;
       this.lossHistory.push(warmupLoss);
+      this.colorLossHistory.push(warmupColorLoss);
       this.batches = 1;
 
       this.status = "training";
@@ -1000,7 +1020,7 @@ export class VLATrainerCore {
           continue;
         }
         const t0 = performance.now();
-        const loss = await this.trainStep();
+        const [loss, colorLoss] = await this.trainStep();
         if (!this.running || this.runId !== myRun) break;
 
         // A webglcontextlost event during this batch (installGLWatchdog) means
@@ -1027,15 +1047,20 @@ export class VLATrainerCore {
         }
 
         this.loss = loss;
+        this.colorLoss = colorLoss;
         if (Number.isNaN(this.initialLoss)) this.initialLoss = loss;
         // keep the FULL curve from batch 0 → now (capped only by MAX_BATCHES),
         // so the plot shows the whole training development, not a trailing slice
         this.lossHistory.push(loss);
+        this.colorLossHistory.push(colorLoss);
         this.batches++;
         // low-lag convergence signal: mean of the last CONVERGE_WINDOW raw
         // losses (read straight off the tail of lossHistory — no extra buffer)
         const window = this.lossHistory.slice(-CONVERGE_WINDOW);
         this.smoothLoss = window.reduce((a, b) => a + b, 0) / window.length;
+        const colorWindow = this.colorLossHistory.slice(-CONVERGE_WINDOW);
+        this.smoothColorLoss =
+          colorWindow.reduce((a, b) => a + b, 0) / colorWindow.length;
 
         // held-out per-bucket telemetry (sweep harness only; probeEveryN
         // defaults to 0 so the demo path skips this entirely)
@@ -1045,8 +1070,14 @@ export class VLATrainerCore {
         // converged? training's job is done — keep the model, stop the loop.
         // Gate on `physical`: a non-physical (zeroed) loss must never advance
         // the streak, so a dead context can never satisfy convergence — even if
-        // its zeros drag smoothLoss under CONVERGE_LOSS.
-        if (physical && this.batches >= MIN_BATCHES && this.smoothLoss < CONVERGE_LOSS) {
+        // its zeros drag smoothLoss under CONVERGE_LOSS. BOTH heads must be
+        // simultaneously settled — see CONVERGE_COLOR_LOSS.
+        if (
+          physical &&
+          this.batches >= MIN_BATCHES &&
+          this.smoothLoss < CONVERGE_LOSS &&
+          this.smoothColorLoss < CONVERGE_COLOR_LOSS
+        ) {
           this.convergeStreak++;
         } else {
           this.convergeStreak = 0;
@@ -1121,6 +1152,9 @@ export class VLATrainerCore {
     this.smoothLoss = NaN;
     this.initialLoss = NaN;
     this.lossHistory = [];
+    this.colorLoss = NaN;
+    this.smoothColorLoss = NaN;
+    this.colorLossHistory = [];
     this.batches = 0;
     this.convergeStreak = 0;
     this.nonPhysicalStreak = 0;
