@@ -25,3 +25,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mini_vla"]
+
+# `train.py` lives at the repo root (see README/CLAUDE.md's documented
+# `python train.py` workflow) but the `mini-vla-train` console script
+# (train:main) needs it importable from a real (non-editable) install too —
+# without this, `pip install .` ships an entry point that immediately
+# crashes with ModuleNotFoundError: No module named 'train'.
+[tool.hatch.build.targets.wheel.force-include]
+"train.py" = "train.py"

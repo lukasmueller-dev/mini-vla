@@ -14,7 +14,7 @@
 // word2vec text format, FREQUENCY-ORDERED, so "the top N_WORDS words" is just
 // the first N accepted lines. The stream is gunzipped + read line-by-line and
 // aborted once the vocab is full (~10MB transferred of the 66MB file, nothing
-// cached on disk). Rerun only when the grammar (src/grammar.json), vocab
+// cached on disk). Rerun only when the grammar (assets/grammar.json), vocab
 // size, or quantization changes; the artifacts are committed.
 //
 //   node scripts/gen-embeddings-data.mjs
